@@ -1,7 +1,6 @@
 import time
 import asyncio
 import edge_tts
-from numpy import isin
 import pygame
 import tempfile, os
 from mutagen.mp3 import MP3

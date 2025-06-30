@@ -28,7 +28,16 @@ class Execution():
         
         for i, paper in enumerate(papers):
             self.log(f"\n[{i+1}] Processing: {paper['title']}")
-            summary = self.agent.summarize_paper(paper["title"], paper["abstract"], self.language, pdf_path=paper["pdf_path"])
+            try:
+                summary = self.agent.summarize_paper(
+                    paper["title"],
+                    paper["abstract"],
+                    self.language,
+                    pdf_path=paper["pdf_path"]
+                )
+            except Exception as e:
+                self.log(f"❌ Error summarizing paper [{i+1}]: {str(e)}")
+                continue  # 忽略该条，跳过
             output.append({
                 "title": paper["title"],
                 "summary": summary

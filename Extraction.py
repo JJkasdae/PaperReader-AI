@@ -62,16 +62,16 @@ class Extraction():
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(papers, f, ensure_ascii=False, indent=4)
 
-    def fetch_daily_papers(self, url="https://huggingface.co/papers", max_count = 2):
+    def fetch_daily_papers(self, url="https://huggingface.co/papers", max_count = None):
         response = requests.get(url)
         soup = BeautifulSoup(response.text, "html.parser")
-        count = 0
+        # count = 0
 
         papers = []
 
         for card in soup.select("article"):  # 每篇论文是一个 <article> 元素
-            if count == max_count:
-                break
+            # if count == max_count:
+            #     break
             title_tag = card.select_one("h3")
             if not title_tag:
                 continue
@@ -92,7 +92,7 @@ class Extraction():
                 "pdf_path": pdf_path
             })
             time.sleep(1)  # 礼貌抓取，避免太快被封IP
-            count += 1
+            # count += 1
         
         return papers
 
