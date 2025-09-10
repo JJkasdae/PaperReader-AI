@@ -1,0 +1,72 @@
+我现在有一个PaperReader - AI的自动化AI工作流，工作流会利用代码自动从hugging face上抓去daily paper,
+下载paper的pdf，以及将pdf上传到openai api的一个chat中，以及来获得这个paper对应的归纳总结。现在我希望将
+这个工作流转化成一个agentic AI的app，我该怎么做？
+
+agentic AI的app里面应当有不同的角色，例如planner, fetcher, parser等。这些角色可以上同一个模型的不同
+”代理实例”，由编排层驱动；不一定要多个聊天窗口。
+
+*注意引入Critic形成反馈回路。
+
+
+
+
+从你的现有脚本平滑迁移的 3 个阶段
+
+阶段 1：可插拔工具 + 审核环
+保持原顺序，把Parser/Analyst/Writer做成“工具”，新增一个LLM-Critic做质量门（不合格自动重试/补检索）。、
+这是最小 agent 化。
+
+阶段 2：引入 Planner（LLM 决策编排）
+让 Planner 依据 Critic 的反馈动态选择“再检索/再分析/直接发布”。开始把决策从代码转到 LLM。
+
+阶段 3：多代理并发 + 图式编排
+同主题论文并发处理；引入**图式编排（LangGraph/AWS Bedrock）**实现分支与回环，并加可观测性/审计。
+
+
+
+
+
+工程落地要点（踩坑清单）
+
+两种编排权：LLM 决策 vs 代码编排，按风险混用（关键环节用代码兜底）。
+
+可观测性：记录每次决策的“理由+输入输出+工具调用”，支持重放和审计（生产必备）。
+
+数据与事实核对：Critic 必须检查引用、表格数值、链接可达性；必要时加入二模交叉验证/投票（MoA思路）。
+
+停止条件：给 Planner 明确终止规则（最大轮数、最少证据、质量阈值）防止“无休止循环”。
+
+渐进权限：外部操作（写文件、发消息）先走“干运行（dry-run）”再放权，减少错误代价。
+
+
+
+
+下面是**最基础能跑通**你这个项目需要的“工具”清单（每个都是可被代理调用的代码单元）：
+
+1. `list_daily_ids(date: str) -> list[str]`
+   从 Hugging Face 抓当天的 paper 标识列表。
+
+2. `get_paper_meta(paper_id: str) -> dict`
+   取元数据（标题、作者、摘要、`pdf_url` 等）。
+
+3. `download_pdf(pdf_url: str) -> str`
+   下载 PDF，返回本地路径。
+
+4. `pdf_to_chunks(pdf_path: str, max_tokens: int = 3000) -> list[str]`
+   读取/解析 PDF，并按 token 上限切成块。
+
+5. `llm_summarize(chunks: list[str], meta: dict) -> str`
+   调用 LLM 对分块做汇总，产出单条摘要。
+
+6. `save_summary(paper_id: str, summary: str, meta: dict) -> None`
+   将结果落盘/入库（JSON/Markdown 皆可）。
+
+> 以上 6 个工具即可完成：获取→下载→阅读切块→总结→输出。
+
+
+从工作流到Agentic的关键变化：
+
+1. 决策能力 ：Agent需要能够根据情况选择使用哪些工具
+2. 工具调用 ：所有功能都要包装成Agent可调用的工具
+3. 状态管理 ：Agent需要记住之前的操作和结果
+4. 错误处理 ：Agent需要能够处理失败并重试或选择替代方案
