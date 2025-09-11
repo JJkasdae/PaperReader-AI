@@ -238,7 +238,7 @@ class SinglePaperExtractionTool(BaseTool):
     
     def validate_parameters(self, **kwargs) -> bool:
         """
-        验证输入参数
+        验证输入参数（此函数还未被调用，这个函数可能会在_execute_impl运行之前或者在开头调用，以此知道输入参数是否合规。）
         
         作用：
         1. 检查paper_url参数是否存在且为字符串类型
@@ -255,11 +255,106 @@ class SinglePaperExtractionTool(BaseTool):
         返回:
             bool: 参数验证是否通过
         """
-        # TODO: 实现参数验证
-        # 1. 检查kwargs中是否包含'paper_url'
-        # 2. 验证paper_url的类型和格式
-        # 3. 可选：检查URL的可访问性
-        pass
+        
+        # 1. 检查必需参数paper_url是否存在
+        if 'paper_url' not in kwargs:
+            if self.log_queue:
+                self.log_queue.put("错误: 缺少必需参数 'paper_url'")
+            return False
+        
+        paper_url = kwargs.get('paper_url')
+        
+        # 2. 验证paper_url是否为字符串类型
+        if not isinstance(paper_url, str):
+            if self.log_queue:
+                self.log_queue.put(f"错误: paper_url必须是字符串类型，当前类型: {type(paper_url).__name__}")
+            return False
+        
+        # 3. 检查URL是否为空或只包含空白字符
+        if not paper_url.strip():
+            if self.log_queue:
+                self.log_queue.put("错误: paper_url不能为空")
+            return False
+        
+        # 4. 使用urlparse验证URL格式的基本有效性
+        try:
+            parsed_url = urlparse(paper_url)
+            # 检查URL是否包含scheme（协议）和netloc（域名）
+            if not parsed_url.scheme or not parsed_url.netloc:
+                if self.log_queue:
+                    self.log_queue.put(f"错误: URL格式无效，缺少协议或域名: {paper_url}")
+                return False
+            
+            # 检查协议是否为http或https
+            if parsed_url.scheme.lower() not in ['http', 'https']:
+                if self.log_queue:
+                    self.log_queue.put(f"错误: 不支持的URL协议 '{parsed_url.scheme}'，仅支持http和https")
+                return False
+                
+        except Exception as e:
+            # urlparse解析失败
+            if self.log_queue:
+                self.log_queue.put(f"错误: URL解析失败: {str(e)}")
+            return False
+        
+        # 5. 验证可选参数download_pdf的类型（如果提供）
+        download_pdf = kwargs.get('download_pdf')
+        if download_pdf is not None and not isinstance(download_pdf, bool):
+            if self.log_queue:
+                self.log_queue.put(f"错误: download_pdf必须是布尔类型，当前类型: {type(download_pdf).__name__}")
+            return False
+        
+        # 6. 验证可选参数custom_filename的类型（如果提供）
+        custom_filename = kwargs.get('custom_filename')
+        if custom_filename is not None:
+            # 检查是否为字符串类型
+            if not isinstance(custom_filename, str):
+                if self.log_queue:
+                    self.log_queue.put(f"错误: custom_filename必须是字符串类型，当前类型: {type(custom_filename).__name__}")
+                return False
+            
+            # 检查文件名是否包含非法字符（Windows和Linux通用的非法字符）
+            illegal_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+            if any(char in custom_filename for char in illegal_chars):
+                if self.log_queue:
+                    self.log_queue.put(f"错误: custom_filename包含非法字符: {custom_filename}")
+                return False
+            
+            # 检查文件名长度是否合理（避免过长的文件名）
+            if len(custom_filename.strip()) == 0:
+                if self.log_queue:
+                    self.log_queue.put("错误: custom_filename不能为空字符串")
+                return False
+            
+            if len(custom_filename) > 200:
+                if self.log_queue:
+                    self.log_queue.put(f"错误: custom_filename过长（{len(custom_filename)}字符），最大允许200字符")
+                return False
+        
+        # 7. 可选：检查URL的可访问性（发送HEAD请求）
+        # 注意：这个检查比较耗时，在生产环境中可能需要根据需求决定是否启用
+        try:
+            # 发送HEAD请求检查URL是否可访问，设置较短的超时时间
+            head_response = self.session.head(paper_url, timeout=10, allow_redirects=True)
+            
+            # 检查HTTP状态码是否表示成功或重定向
+            if head_response.status_code >= 400:
+                if self.log_queue:
+                    self.log_queue.put(f"警告: URL返回HTTP状态码 {head_response.status_code}，可能无法访问: {paper_url}")
+                # 注意：这里返回True而不是False，因为有些网站可能阻止HEAD请求但允许GET请求
+                # 实际的可访问性检查会在_execute_impl中的GET请求时进行
+            
+        except requests.RequestException as e:
+            # 网络请求失败，记录警告但不阻止验证通过
+            if self.log_queue:
+                self.log_queue.put(f"警告: 无法验证URL可访问性: {str(e)}")
+            # 同样返回True，因为网络问题可能是临时的
+        
+        # 8. 所有验证通过
+        if self.log_queue:
+            self.log_queue.put(f"参数验证通过: {paper_url}")
+        
+        return True
     
     def is_available(self) -> bool:
         """
@@ -280,11 +375,187 @@ class SinglePaperExtractionTool(BaseTool):
         返回:
             bool: 工具是否可用
         """
-        # TODO: 实现可用性检查
-        # 1. 尝试导入必要的包
-        # 2. 检查临时目录权限
-        # 3. 可选：测试网络连接
-        pass
+        
+        # 1. 检查必要的Python包是否可用
+        try:
+            # 验证requests包是否可导入和使用
+            import requests
+            # 尝试创建一个Session对象来验证requests功能
+            test_session = requests.Session()
+            if self.log_queue:
+                self.log_queue.put("✓ requests包检查通过")
+                
+        except ImportError as e:
+            # requests包未安装或导入失败
+            if self.log_queue:
+                self.log_queue.put(f"✗ requests包不可用: {str(e)}")
+            return False
+        except Exception as e:
+            # requests包导入成功但创建Session失败
+            if self.log_queue:
+                self.log_queue.put(f"✗ requests包功能异常: {str(e)}")
+            return False
+        
+        try:
+            # 验证BeautifulSoup包是否可导入和使用
+            from bs4 import BeautifulSoup
+            # 尝试创建一个简单的BeautifulSoup对象来验证功能
+            test_soup = BeautifulSoup("<html><body><h1>test</h1></body></html>", 'html.parser')
+            # 验证基本解析功能
+            if test_soup.find('h1') is None:
+                raise Exception("BeautifulSoup解析功能异常")
+            if self.log_queue:
+                self.log_queue.put("✓ BeautifulSoup包检查通过")
+                
+        except ImportError as e:
+            # BeautifulSoup包未安装或导入失败
+            if self.log_queue:
+                self.log_queue.put(f"✗ BeautifulSoup包不可用: {str(e)}")
+            return False
+        except Exception as e:
+            # BeautifulSoup包导入成功但功能异常
+            if self.log_queue:
+                self.log_queue.put(f"✗ BeautifulSoup包功能异常: {str(e)}")
+            return False
+        
+        # 2. 检查临时PDF目录的读写权限
+        try:
+            # 确保临时目录存在
+            os.makedirs(self.temp_pdf_dir, exist_ok=True)
+            
+            # 创建测试文件来验证写权限
+            test_file_path = os.path.join(self.temp_pdf_dir, "test_write_permission.tmp")
+            
+            # 尝试写入测试文件
+            with open(test_file_path, 'w', encoding='utf-8') as test_file:
+                test_file.write("test content for write permission")
+            
+            # 尝试读取测试文件验证读权限
+            with open(test_file_path, 'r', encoding='utf-8') as test_file:
+                content = test_file.read()
+                if content != "test content for write permission":
+                    raise Exception("文件读取内容不匹配")
+            
+            # 清理测试文件
+            os.remove(test_file_path)
+            
+            if self.log_queue:
+                self.log_queue.put(f"✓ 临时目录读写权限检查通过: {self.temp_pdf_dir}")
+                
+        except PermissionError as e:
+            # 权限不足，无法创建目录或文件
+            if self.log_queue:
+                self.log_queue.put(f"✗ 临时目录权限不足: {str(e)}")
+            return False
+        except OSError as e:
+            # 操作系统相关错误（磁盘空间不足、路径无效等）
+            if self.log_queue:
+                self.log_queue.put(f"✗ 临时目录操作系统错误: {str(e)}")
+            return False
+        except Exception as e:
+            # 其他文件系统相关错误
+            if self.log_queue:
+                self.log_queue.put(f"✗ 临时目录访问异常: {str(e)}")
+            return False
+        
+        # 3. 检查网络连接可用性（可选，使用轻量级测试）
+        try:
+            # 使用HEAD请求测试网络连接，选择可靠的测试URL
+            test_urls = [
+                "https://www.google.com",  # 全球可访问
+                "https://httpbin.org/status/200",  # HTTP测试服务
+                "https://www.baidu.com"  # 中国大陆可访问
+            ]
+            
+            network_available = False
+            for test_url in test_urls:
+                try:
+                    # 发送HEAD请求，设置短超时时间
+                    response = self.session.head(test_url, timeout=5)
+                    if response.status_code < 400:
+                        network_available = True
+                        if self.log_queue:
+                            self.log_queue.put(f"✓ 网络连接检查通过: {test_url}")
+                        break
+                except:
+                    # 单个URL失败，继续尝试下一个
+                    continue
+            
+            if not network_available:
+                # 所有测试URL都失败，但这不一定意味着工具不可用
+                # 因为目标网站可能仍然可访问
+                if self.log_queue:
+                    self.log_queue.put("⚠ 网络连接测试失败，但不影响工具可用性判断")
+            
+        except Exception as e:
+            # 网络测试异常，记录警告但不影响工具可用性
+            if self.log_queue:
+                self.log_queue.put(f"⚠ 网络连接测试异常: {str(e)}")
+        
+        # 4. 检查其他系统依赖
+        try:
+            # 验证正则表达式模块
+            import re
+            test_pattern = re.compile(r'test')
+            if not test_pattern.match('test'):
+                raise Exception("正则表达式功能异常")
+            
+            # 验证URL解析模块
+            from urllib.parse import urlparse
+            test_parsed = urlparse('https://example.com/test')
+            if not test_parsed.scheme or not test_parsed.netloc:
+                raise Exception("URL解析功能异常")
+            
+            # 验证时间处理模块
+            from datetime import datetime
+            test_time = datetime.now()
+            if not test_time:
+                raise Exception("时间处理功能异常")
+            
+            if self.log_queue:
+                self.log_queue.put("✓ 系统依赖模块检查通过")
+                
+        except ImportError as e:
+            # 系统模块导入失败（这种情况很少见）
+            if self.log_queue:
+                self.log_queue.put(f"✗ 系统模块不可用: {str(e)}")
+            return False
+        except Exception as e:
+            # 系统模块功能异常
+            if self.log_queue:
+                self.log_queue.put(f"✗ 系统模块功能异常: {str(e)}")
+            return False
+        
+        # 5. 验证工具自身的配置
+        try:
+            # 检查session对象是否正确初始化
+            if not hasattr(self, 'session') or self.session is None:
+                raise Exception("网络会话对象未初始化")
+            
+            # 检查关键配置参数
+            if not hasattr(self, 'temp_pdf_dir') or not self.temp_pdf_dir:
+                raise Exception("临时目录配置缺失")
+            
+            if not hasattr(self, 'request_timeout') or self.request_timeout <= 0:
+                raise Exception("请求超时配置无效")
+            
+            if not hasattr(self, 'max_retries') or self.max_retries < 0:
+                raise Exception("重试次数配置无效")
+            
+            if self.log_queue:
+                self.log_queue.put("✓ 工具配置检查通过")
+                
+        except Exception as e:
+            # 工具配置异常
+            if self.log_queue:
+                self.log_queue.put(f"✗ 工具配置异常: {str(e)}")
+            return False
+        
+        # 6. 所有检查通过，工具可用
+        if self.log_queue:
+            self.log_queue.put("✅ SinglePaperExtractionTool 可用性检查全部通过")
+        
+        return True
     
     def get_usage_example(self) -> Dict[str, Any]:
         """
