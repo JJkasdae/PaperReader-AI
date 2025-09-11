@@ -70,3 +70,6 @@ agentic AI的app里面应当有不同的角色，例如planner, fetcher, parser�
 2. 工具调用 ：所有功能都要包装成Agent可调用的工具
 3. 状态管理 ：Agent需要记住之前的操作和结果
 4. 错误处理 ：Agent需要能够处理失败并重试或选择替代方案
+
+*****
+有一个地方需要注意，cleanup现在在SinglePaperExtraction里面，可能这是一个冗余，因为应当是所有的papers都提取后，在做删除，而不是单一的paper提取然后删除。

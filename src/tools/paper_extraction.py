@@ -378,8 +378,6 @@ class SinglePaperExtractionTool(BaseTool):
         
         # 1. 检查必要的Python包是否可用
         try:
-            # 验证requests包是否可导入和使用
-            import requests
             # 尝试创建一个Session对象来验证requests功能
             test_session = requests.Session()
             if self.log_queue:
@@ -397,8 +395,6 @@ class SinglePaperExtractionTool(BaseTool):
             return False
         
         try:
-            # 验证BeautifulSoup包是否可导入和使用
-            from bs4 import BeautifulSoup
             # 尝试创建一个简单的BeautifulSoup对象来验证功能
             test_soup = BeautifulSoup("<html><body><h1>test</h1></body></html>", 'html.parser')
             # 验证基本解析功能
@@ -495,13 +491,11 @@ class SinglePaperExtractionTool(BaseTool):
         # 4. 检查其他系统依赖
         try:
             # 验证正则表达式模块
-            import re
             test_pattern = re.compile(r'test')
             if not test_pattern.match('test'):
                 raise Exception("正则表达式功能异常")
             
             # 验证URL解析模块
-            from urllib.parse import urlparse
             test_parsed = urlparse('https://example.com/test')
             if not test_parsed.scheme or not test_parsed.netloc:
                 raise Exception("URL解析功能异常")
@@ -563,30 +557,111 @@ class SinglePaperExtractionTool(BaseTool):
         
         作用：
         1. 为Agent提供具体的使用示例
-        2. 展示正确的参数格式
-        3. 说明预期的输出格式
+        2. 展示正确的参数格式和类型
+        3. 说明预期的输出格式和字段
         4. 帮助Agent学习如何使用这个工具
+        5. 提供不同场景下的参数配置示例
         
         返回:
-            Dict[str, Any]: 包含使用示例的字典
+            Dict[str, Any]: 包含完整使用示例的字典
         """
         return {
-            "input_example": {
-                "paper_url": "https://huggingface.co/papers/2301.00001"
-            },
-            "expected_output": {
-                "description": "返回包含title、abstract、pdf_path、url字段的字典",
-                "example": {
-                    "title": "论文标题示例",
-                    "abstract": "论文摘要内容...",
-                    "pdf_path": "/path/to/temp/paper.pdf",
-                    "url": "https://huggingface.co/papers/2301.00001"
+            # 基本输入示例
+            "input_examples": {
+                "basic": {
+                    "paper_url": "https://arxiv.org/abs/2301.00001",
+                    "description": "最基本的使用方式，只提供论文URL"
+                },
+                "with_pdf_download": {
+                    "paper_url": "https://arxiv.org/abs/2301.00001",
+                    "download_pdf": True,
+                    "description": "启用PDF下载功能"
+                },
+                "with_custom_filename": {
+                    "paper_url": "https://arxiv.org/abs/2301.00001",
+                    "download_pdf": True,
+                    "custom_filename": "my_research_paper",
+                    "description": "使用自定义文件名保存PDF"
+                },
+                "minimal_extraction": {
+                    "paper_url": "https://arxiv.org/abs/2301.00001",
+                    "download_pdf": False,
+                    "description": "仅提取标题和摘要，不下载PDF"
                 }
             },
+            
+            # 支持的URL类型示例
+            "supported_urls": [
+                "https://arxiv.org/abs/2301.00001",
+                "https://huggingface.co/papers/9999.99999",
+                "https://ieeexplore.ieee.org/document/9999999",
+                "https://dl.acm.org/doi/10.1145/3999999.3999999",
+                "https://papers.nips.cc/paper/2023/hash/abcd1234"
+            ],
+            
+            # 预期输出格式
+             "expected_output": {
+                 "success_case": {
+                     "title": "Attention Is All You Need",
+                     "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks...",
+                     "pdf_path": "d:\\temp_pdf\\attention_is_all_you_need.pdf",
+                     "pdf_url": "https://arxiv.org/pdf/1706.03762.pdf",
+                     "url": "https://arxiv.org/abs/1706.03762",
+                     "extraction_time": "2024-01-15T14:30:25.123456",
+                     "success": True,
+                     "error_message": None
+                 },
+                 "error_case": {
+                     "title": None,
+                     "abstract": None,
+                     "pdf_path": None,
+                     "pdf_url": None,
+                     "url": "https://invalid-url.com",
+                     "extraction_time": "2024-01-15T14:30:25.123456",
+                     "success": False,
+                     "error_message": "网络请求失败: HTTPSConnectionPool(host='invalid-url.com', port=443)"
+                 }
+             },
+            
+            # 参数说明
+            "parameter_details": {
+                "paper_url": {
+                    "type": "str",
+                    "required": True,
+                    "description": "论文页面URL，支持主流学术网站",
+                    "validation": "必须是有效的HTTP/HTTPS URL"
+                },
+                "download_pdf": {
+                    "type": "bool",
+                    "required": False,
+                    "default": True,
+                    "description": "是否下载PDF文件到本地"
+                },
+                "custom_filename": {
+                    "type": "str",
+                    "required": False,
+                    "default": "auto-generated from title",
+                    "description": "自定义PDF文件名（不含扩展名）",
+                    "validation": "长度1-100字符，不含特殊字符"
+                }
+            },
+            
+            # 使用场景
             "use_cases": [
-                "从HuggingFace Papers提取单篇论文信息",
-                "为批量论文收集工具提供基础功能",
-                "获取论文PDF用于后续分析"
+                "从arXiv提取最新研究论文信息",
+                "从Hugging Face上获取daily papers"
+                "批量收集特定领域的论文摘要",
+                "为文献综述准备论文资料",
+                "构建论文数据库的基础数据",
+                "学术研究中的论文预处理"
+            ],
+            
+            # 注意事项
+            "notes": [
+                "确保网络连接正常，某些学术网站可能需要访问权限",
+                "PDF下载可能较慢，取决于文件大小和网络速度",
+                "部分网站可能有反爬虫机制，建议适当延时",
+                "自定义文件名会自动过滤不安全字符"
             ]
         }
     
@@ -598,16 +673,89 @@ class SinglePaperExtractionTool(BaseTool):
         1. 清理临时下载的PDF文件
         2. 释放网络连接资源
         3. 清理缓存数据
+        4. 确保工具使用后不留下垃圾文件
         
         实现逻辑：
-        1. 遍历临时PDF目录
-        2. 删除过期的临时文件
-        3. 关闭可能的网络连接
+        1. 遍历临时PDF目录，删除所有PDF文件
+        2. 清理空的临时目录
+        3. 关闭网络Session连接
+        4. 重置工具状态
         """
-        # TODO: 实现资源清理
-        # 1. 清理临时PDF文件
-        # 2. 释放其他资源
-        pass
+        
+        # 1. 清理临时PDF目录中的所有文件
+        try:
+            if os.path.exists(self.temp_pdf_dir):
+                # 遍历临时目录中的所有文件
+                for filename in os.listdir(self.temp_pdf_dir):
+                    file_path = os.path.join(self.temp_pdf_dir, filename)
+                    
+                    # 只删除文件，不删除子目录
+                    if os.path.isfile(file_path):
+                        try:
+                            os.remove(file_path)
+                            if self.log_queue:
+                                self.log_queue.put(f"🧹 已删除临时文件: {file_path}")
+                        except Exception as e:
+                            if self.log_queue:
+                                self.log_queue.put(f"⚠️ 删除文件失败 {file_path}: {str(e)}")
+                
+                # 尝试删除空的临时目录（如果目录为空）
+                try:
+                    if not os.listdir(self.temp_pdf_dir):  # 检查目录是否为空
+                        os.rmdir(self.temp_pdf_dir)
+                        if self.log_queue:
+                            self.log_queue.put(f"🧹 已删除空的临时目录: {self.temp_pdf_dir}")
+                except OSError:
+                    # 目录不为空或删除失败，这是正常情况
+                    pass
+                    
+        except Exception as e:
+            if self.log_queue:
+                self.log_queue.put(f"⚠️ 清理临时目录时发生错误: {str(e)}")
+        
+        # 2. 关闭网络Session连接
+        try:
+            if hasattr(self, 'session') and self.session:
+                self.session.close()
+                if self.log_queue:
+                    self.log_queue.put("🔌 已关闭网络Session连接")
+        except Exception as e:
+            if self.log_queue:
+                self.log_queue.put(f"⚠️ 关闭网络连接时发生错误: {str(e)}")
+        
+        # 3. 记录清理完成
+        if self.log_queue:
+            self.log_queue.put("✅ SinglePaperExtractionTool 资源清理完成")
+    
+    def delete_specific_pdf(self, pdf_path):
+        """
+        删除指定的PDF文件
+        
+        作用：
+        1. 提供单个文件删除功能
+        2. 支持精确的文件清理
+        3. 复用Extraction.py中的删除逻辑
+        
+        参数:
+            pdf_path (str): 要删除的PDF文件路径
+            
+        返回:
+            bool: 删除是否成功
+        """
+        if pdf_path and os.path.exists(pdf_path):
+            try:
+                os.remove(pdf_path)
+                if self.log_queue:
+                    self.log_queue.put(f"🧹 已删除PDF文件: {pdf_path}")
+                return True
+            except Exception as e:
+                if self.log_queue:
+                    self.log_queue.put(f"⚠️ 删除PDF文件失败 {pdf_path}: {str(e)}")
+                return False
+        else:
+            if self.log_queue:
+                self.log_queue.put(f"⚠️ PDF文件不存在或路径无效: {pdf_path}")
+            return False
     
     def _extract_title_from_soup(self, soup):
         """
