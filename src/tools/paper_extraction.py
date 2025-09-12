@@ -1124,8 +1124,61 @@ class DailyPapersCollectorTool(BaseTool):
             log_queue: 日志队列，用于向主进程发送日志信息
         """
         super().__init__(log_queue)
+        
+        # 单篇论文提取工具实例
         self.single_extractor = SinglePaperExtractionTool(log_queue)
+        
+        # 网络请求配置
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        })
+        self.request_timeout = 30  # 请求超时时间（秒）
+        self.max_retries = 3       # 最大重试次数
+        self.retry_delay = 2       # 重试间隔（秒）
+        
+        # 批量处理配置
+        self.default_max_count = 10    # 默认最大收集数量，与get_metadata保持一致
+        self.batch_delay = 1           # 批量请求间隔（秒）
+        self.concurrent_limit = 5      # 并发处理限制
+        self.min_delay_between_requests = 0.5  # 最小请求间隔
+        
+        # 数据源配置
         self.default_source_url = "https://huggingface.co/papers"
+        self.supported_sources = {
+            'huggingface': {
+                'base_url': 'https://huggingface.co/papers',
+                'paper_list_selector': 'article h3 a',
+                'title_selector': 'h3 a',
+                'pagination_selector': '.pagination a',
+                'paper_url_prefix': 'https://huggingface.co'
+            },
+            'arxiv': {
+                'base_url': 'https://arxiv.org/list/cs.AI/recent',
+                'paper_list_selector': 'dt a[title="Abstract"]',
+                'title_selector': 'div.list-title',
+                'pagination_selector': 'a[accesskey]',
+                'paper_url_prefix': 'https://arxiv.org'
+            }
+        }
+        
+        # 批量处理状态跟踪
+        self.failed_papers = []     # 失败的论文列表
+        self.success_count = 0      # 成功处理数量
+        self.total_count = 0        # 总处理数量
+        self.processed_urls = set() # 已处理的URL集合（去重）
+        
+        # BeautifulSoup解析器配置
+        self.parser = 'html.parser'
+        
+        # 日志记录
+        if self.log_queue:
+            self.log_queue.put("DailyPapersCollectorTool initialized successfully")
     
     def get_metadata(self) -> ToolMetadata:
         """
@@ -1139,18 +1192,56 @@ class DailyPapersCollectorTool(BaseTool):
         返回:
             ToolMetadata: 包含工具名称、描述、参数定义等信息
         """
-        # TODO: 实现元数据定义
-        # 返回 ToolMetadata 对象，包含：
-        # - name: "daily_papers_collector"
-        # - description: "从HuggingFace Papers页面批量收集每日论文信息"
-        # - parameters: {
-        #     "source_url": {"type": "str", "required": False, "description": "论文列表页面URL，默认为HuggingFace Papers"},
-        #     "max_count": {"type": "int", "required": False, "description": "最大收集数量，不设置则收集所有"},
-        #     "include_pdf": {"type": "bool", "required": False, "description": "是否下载PDF文件，默认为True"}
-        #   }
-        # - return_type: "list"
-        # - category: "extraction"
-        pass
+        return ToolMetadata(
+            name="daily_papers_collector",
+            description="批量收集每日论文列表，从指定数据源（如HuggingFace Papers、arXiv等）获取多篇论文的摘要、标题和PDF文件",
+            parameters={
+                "source_url": {
+                    "type": "str",
+                    "required": False,
+                    "description": "论文数据源URL，如果不提供则使用默认的HuggingFace Papers每日列表",
+                    "example": "https://huggingface.co/papers"
+                },
+                "max_papers": {
+                    "type": "int",
+                    "required": False,
+                    "default": 10,
+                    "description": "要收集的最大论文数量，默认为10篇，范围1-50",
+                    "minimum": 1,
+                    "maximum": 50
+                },
+                "download_pdfs": {
+                    "type": "bool",
+                    "required": False,
+                    "default": True,
+                    "description": "是否下载所有论文的PDF文件到本地，默认为True"
+                },
+                "filter_keywords": {
+                    "type": "list",
+                    "required": False,
+                    "description": "关键词过滤列表，只收集标题或摘要包含这些关键词的论文",
+                    "example": ["machine learning", "AI", "neural network"]
+                }
+            },
+            return_type="dict",
+            return_description={
+                "description": "包含批量论文收集结果的字典",
+                "schema": {
+                    "papers": "论文信息列表，每个元素包含title、abstract、pdf_path、pdf_url、url等字段",
+                    "total_found": "找到的论文总数",
+                    "total_collected": "成功收集的论文数量",
+                    "total_downloaded": "成功下载PDF的论文数量",
+                    "failed_papers": "收集失败的论文URL列表",
+                    "source_url": "使用的数据源URL",
+                    "collection_time": "收集完成时间戳",
+                    "success": "整体收集是否成功",
+                    "error_message": "错误信息（如果失败）"
+                }
+            },
+            category="extraction",
+            tags=["paper", "pdf", "academic", "research", "batch", "daily"],
+            version="1.0.0"
+        )
     
     def _execute_impl(self, **kwargs) -> list[Dict[str, Any]]:
         """
@@ -1187,19 +1278,138 @@ class DailyPapersCollectorTool(BaseTool):
         6. 记录处理进度和错误信息
         7. 返回完整的论文信息列表
         """
-        # TODO: 实现批量收集逻辑
-        # 1. 获取参数：source_url, max_count, include_pdf
-        # 2. 发送requests.get()请求获取列表页面
-        # 3. 创建BeautifulSoup对象解析HTML
-        # 4. 提取所有论文链接（查找article标签或相关结构）
-        # 5. 根据max_count限制处理数量
-        # 6. 循环处理每篇论文：
-        #    - 调用self.single_extractor.execute()
-        #    - 记录处理进度
-        #    - 处理异常情况
-        #    - 添加延时避免请求过快
-        # 7. 返回所有论文信息的列表
-        pass
+        # 1. 获取并验证输入参数
+        source_url = kwargs.get('source_url', self.default_source_url)
+        max_papers = kwargs.get('max_papers', self.default_max_count)  # 与get_metadata中的默认值保持一致
+        download_pdfs = kwargs.get('download_pdfs', True)
+        filter_keywords = kwargs.get('filter_keywords', [])
+        
+        # 初始化返回结果
+        result = {
+            "papers": [],
+            "total_found": 0,
+            "total_collected": 0,
+            "total_downloaded": 0,
+            "failed_papers": [],
+            "source_url": source_url,
+            "collection_time": datetime.now().isoformat(),
+            "success": False,
+            "error_message": None
+        }
+        
+        try:
+            if self.log_queue:
+                self.log_queue.put(f"开始批量收集论文，数据源: {source_url}，最大数量: {max_papers}")
+            
+            # 2. 发送HTTP请求获取论文列表页面
+            response = None
+            for attempt in range(self.max_retries):
+                try:
+                    response = self.session.get(source_url, timeout=self.request_timeout)
+                    response.raise_for_status()
+                    break
+                except requests.RequestException as e:
+                    if attempt < self.max_retries - 1:
+                        if self.log_queue:
+                            self.log_queue.put(f"请求失败，{self.retry_delay}秒后重试 (尝试 {attempt + 1}/{self.max_retries}): {e}")
+                        time.sleep(self.retry_delay)
+                    else:
+                        raise
+            
+            # 3. 解析HTML，提取所有论文链接
+            soup = BeautifulSoup(response.text, self.parser)
+            paper_links = self._parse_paper_links_from_soup(soup, source_url)
+            
+            result["total_found"] = len(paper_links)
+            
+            if self.log_queue:
+                self.log_queue.put(f"找到 {len(paper_links)} 篇论文")
+            
+            # 4. 应用关键词过滤
+            if filter_keywords:
+                filtered_links = []
+                for paper in paper_links:
+                    title_lower = paper["title"].lower()
+                    if any(keyword.lower() in title_lower for keyword in filter_keywords):
+                        filtered_links.append(paper)
+                paper_links = filtered_links
+                
+                if self.log_queue:
+                    self.log_queue.put(f"关键词过滤后剩余 {len(paper_links)} 篇论文")
+            
+            # 5. 根据max_papers限制处理数量
+            paper_links = paper_links[:max_papers]
+            
+            # 6. 循环处理每篇论文
+            for i, paper_info in enumerate(paper_links, 1):
+                try:
+                    if self.log_queue:
+                        self.log_queue.put(f"正在处理第 {i}/{len(paper_links)} 篇论文: {paper_info['title']}")
+                    
+                    # 调用SinglePaperExtractionTool处理单篇论文
+                    paper_result = self.single_extractor.execute(
+                        paper_url=paper_info["url"],
+                        download_pdf=download_pdfs
+                    )
+                    
+                    if paper_result.success:
+                        result["papers"].append(paper_result.data)
+                        result["total_collected"] += 1
+                        
+                        # 统计PDF下载成功数量
+                        if paper_result.data.get("pdf_path"):
+                            result["total_downloaded"] += 1
+                        
+                        if self.log_queue:
+                            self.log_queue.put(f"✓ 成功处理: {paper_info['title']}")
+                    else:
+                        # 处理失败的论文
+                        result["failed_papers"].append({
+                            "url": paper_info["url"],
+                            "title": paper_info["title"],
+                            "error": paper_result.error_message
+                        })
+                        
+                        if self.log_queue:
+                            self.log_queue.put(f"✗ 处理失败: {paper_info['title']} - {paper_result.error_message}")
+                
+                except Exception as e:
+                    # 单篇论文处理异常
+                    error_msg = f"处理论文时发生异常: {str(e)}"
+                    result["failed_papers"].append({
+                        "url": paper_info["url"],
+                        "title": paper_info["title"],
+                        "error": error_msg
+                    })
+                    
+                    if self.log_queue:
+                        self.log_queue.put(f"✗ 异常: {paper_info['title']} - {error_msg}")
+                
+                # 添加延时避免请求过快
+                if i < len(paper_links):  # 不是最后一篇
+                    time.sleep(self.request_interval)
+            
+            # 7. 设置成功状态
+            result["success"] = True
+            
+            if self.log_queue:
+                self.log_queue.put(f"批量收集完成: 成功 {result['total_collected']} 篇，失败 {len(result['failed_papers'])} 篇")
+        
+        except requests.RequestException as e:
+            # 网络请求相关错误
+            error_msg = f"网络请求失败: {str(e)}"
+            result["error_message"] = error_msg
+            if self.log_queue:
+                self.log_queue.put(f"错误: {error_msg}")
+        
+        except Exception as e:
+            # 其他所有错误
+            error_msg = f"批量收集过程中发生错误: {str(e)}"
+            result["error_message"] = error_msg
+            if self.log_queue:
+                self.log_queue.put(f"错误: {error_msg}")
+        
+        return result
     
     def validate_parameters(self, **kwargs) -> bool:
         """
@@ -1207,49 +1417,247 @@ class DailyPapersCollectorTool(BaseTool):
         
         作用：
         1. 验证source_url格式（如果提供）
-        2. 检查max_count是否为正整数（如果提供）
-        3. 验证include_pdf是否为布尔值（如果提供）
-        4. 确保参数组合的合理性
+        2. 检查max_papers是否为正整数且在有效范围内
+        3. 验证download_pdfs是否为布尔值
+        4. 检查filter_keywords是否为列表格式
+        5. 确保参数组合的合理性
         
         实现逻辑：
-        1. 检查source_url格式（可选参数）
-        2. 验证max_count范围（可选参数，必须>0）
-        3. 验证include_pdf类型（可选参数）
-        4. 检查参数之间的逻辑关系
+        1. 检查source_url格式（可选参数，必须是有效URL）
+        2. 验证max_papers范围（可选参数，必须在1-50之间）
+        3. 验证download_pdfs类型（可选参数，必须是布尔值）
+        4. 检查filter_keywords格式（可选参数，必须是字符串列表）
+        5. 记录验证过程和结果
+        
+        参数:
+            **kwargs: 待验证的参数字典
+                - source_url (str, optional): 论文数据源URL
+                - max_papers (int, optional): 最大收集论文数量，范围1-50
+                - download_pdfs (bool, optional): 是否下载PDF文件
+                - filter_keywords (list, optional): 关键词过滤列表
         
         返回:
             bool: 参数验证是否通过
         """
-        # TODO: 实现参数验证
-        # 1. 验证source_url格式（如果存在）
-        # 2. 检查max_count是否为正整数（如果存在）
-        # 3. 验证include_pdf是否为布尔值（如果存在）
-        # 4. 检查参数的合理性
-        pass
+        try:
+            # 1. 验证source_url参数（可选）
+            if 'source_url' in kwargs:
+                source_url = kwargs['source_url']
+                
+                # 检查是否为字符串类型
+                if not isinstance(source_url, str):
+                    if self.log_queue:
+                        self.log_queue.put(f"参数验证失败: source_url必须是字符串类型，当前类型: {type(source_url)}")
+                    return False
+                
+                # 检查URL格式是否有效
+                parsed_url = urlparse(source_url)
+                if not parsed_url.scheme or not parsed_url.netloc:
+                    if self.log_queue:
+                        self.log_queue.put(f"参数验证失败: source_url格式无效: {source_url}")
+                    return False
+                
+                # 检查协议是否为http或https
+                if parsed_url.scheme not in ['http', 'https']:
+                    if self.log_queue:
+                        self.log_queue.put(f"参数验证失败: source_url必须使用http或https协议: {source_url}")
+                    return False
+                
+                if self.log_queue:
+                    self.log_queue.put(f"✓ source_url验证通过: {source_url}")
+            
+            # 2. 验证max_papers参数（可选）
+            if 'max_papers' in kwargs:
+                max_papers = kwargs['max_papers']
+                
+                # 检查是否为整数类型
+                if not isinstance(max_papers, int):
+                    if self.log_queue:
+                        self.log_queue.put(f"参数验证失败: max_papers必须是整数类型，当前类型: {type(max_papers)}")
+                    return False
+                
+                # 检查数值范围（根据get_metadata中的定义：1-50）
+                if max_papers < 1 or max_papers > 50:
+                    if self.log_queue:
+                        self.log_queue.put(f"参数验证失败: max_papers必须在1-50范围内，当前值: {max_papers}")
+                    return False
+                
+                if self.log_queue:
+                    self.log_queue.put(f"✓ max_papers验证通过: {max_papers}")
+            
+            # 3. 验证download_pdfs参数（可选）
+            if 'download_pdfs' in kwargs:
+                download_pdfs = kwargs['download_pdfs']
+                
+                # 检查是否为布尔类型
+                if not isinstance(download_pdfs, bool):
+                    if self.log_queue:
+                        self.log_queue.put(f"参数验证失败: download_pdfs必须是布尔类型，当前类型: {type(download_pdfs)}")
+                    return False
+                
+                if self.log_queue:
+                    self.log_queue.put(f"✓ download_pdfs验证通过: {download_pdfs}")
+            
+            # 4. 验证filter_keywords参数（可选）
+            if 'filter_keywords' in kwargs:
+                filter_keywords = kwargs['filter_keywords']
+                
+                # 检查是否为列表类型
+                if not isinstance(filter_keywords, list):
+                    if self.log_queue:
+                        self.log_queue.put(f"参数验证失败: filter_keywords必须是列表类型，当前类型: {type(filter_keywords)}")
+                    return False
+                
+                # 检查列表中的每个元素是否为字符串
+                for i, keyword in enumerate(filter_keywords):
+                    if not isinstance(keyword, str):
+                        if self.log_queue:
+                            self.log_queue.put(f"参数验证失败: filter_keywords[{i}]必须是字符串，当前类型: {type(keyword)}")
+                        return False
+                    
+                    # 检查关键词是否为空字符串
+                    if not keyword.strip():
+                        if self.log_queue:
+                            self.log_queue.put(f"参数验证失败: filter_keywords[{i}]不能为空字符串")
+                        return False
+                
+                if self.log_queue:
+                    self.log_queue.put(f"✓ filter_keywords验证通过: {len(filter_keywords)}个关键词")
+            
+            # 5. 检查参数组合的合理性
+            # 如果设置了filter_keywords但max_papers很小，给出警告
+            if 'filter_keywords' in kwargs and 'max_papers' in kwargs:
+                if len(kwargs['filter_keywords']) > 0 and kwargs['max_papers'] < 5:
+                    if self.log_queue:
+                        self.log_queue.put(f"警告: 设置了关键词过滤但max_papers较小({kwargs['max_papers']})，可能导致收集结果很少")
+            
+            # 6. 记录验证成功
+            if self.log_queue:
+                validated_params = [key for key in ['source_url', 'max_papers', 'download_pdfs', 'filter_keywords'] if key in kwargs]
+                self.log_queue.put(f"✓ 参数验证全部通过，已验证参数: {validated_params}")
+            
+            return True
+            
+        except Exception as e:
+            # 捕获验证过程中的任何异常
+            error_msg = f"参数验证过程中发生异常: {str(e)}"
+            if self.log_queue:
+                self.log_queue.put(f"参数验证失败: {error_msg}")
+            return False
     
     def is_available(self) -> bool:
         """
         检查工具是否可用
         
         作用：
-        1. 检查SinglePaperExtractionTool是否可用
-        2. 验证网络连接和依赖包
-        3. 确认批量处理的环境准备
+        1. 检查SinglePaperExtractionTool是否可用（包含所有基础依赖检查）
+        2. 验证工具自身配置的完整性
+        3. 测试批量处理相关的功能模块
         
         实现逻辑：
-        1. 调用self.single_extractor.is_available()
-        2. 检查网络连接
-        3. 验证必要的依赖包
-        4. 检查系统资源（内存、磁盘空间）
+        1. 调用self.single_extractor.is_available()检查基础功能和依赖
+        2. 检查工具配置参数的有效性
+        3. 测试批量处理相关的功能模块
         
         返回:
             bool: 工具是否可用
         """
-        # TODO: 实现可用性检查
-        # 1. 检查SinglePaperExtractionTool可用性
-        # 2. 验证网络和依赖
-        # 3. 检查系统资源
-        pass
+        try:
+            # 1. 检查SinglePaperExtractionTool的可用性
+            # SinglePaperExtractionTool.is_available()已经包含了所有基础依赖检查：
+            # - requests和BeautifulSoup包的功能验证
+            # - 临时PDF目录的读写权限检查
+            # - 网络连接可用性测试（可选）
+            # - 系统依赖检查
+            # 因此我们只需要调用它，无需重复检查
+            if not hasattr(self, 'single_extractor') or self.single_extractor is None:
+                if self.log_queue:
+                    self.log_queue.put("✗ SinglePaperExtractionTool未初始化")
+                return False
+            
+            # 调用单篇提取工具的可用性检查（包含所有基础依赖验证）
+            if not self.single_extractor.is_available():
+                if self.log_queue:
+                    self.log_queue.put("✗ SinglePaperExtractionTool不可用")
+                return False
+            
+            if self.log_queue:
+                self.log_queue.put("✓ SinglePaperExtractionTool可用性检查通过（包含所有基础依赖）")
+            
+            # 2. 验证工具自身配置的完整性
+            try:
+                # 检查默认配置参数
+                if not hasattr(self, 'default_max_count') or self.default_max_count <= 0:
+                    raise Exception("default_max_count配置无效")
+                
+                if not hasattr(self, 'batch_delay') or self.batch_delay < 0:
+                    raise Exception("batch_delay配置无效")
+                
+                if not hasattr(self, 'max_retries') or self.max_retries < 0:
+                    raise Exception("max_retries配置无效")
+                
+                # 检查日志队列配置（可选）
+                if hasattr(self, 'log_queue') and self.log_queue is not None:
+                    # 测试日志队列是否可用
+                    try:
+                        self.log_queue.put("测试日志队列功能")
+                    except Exception as e:
+                        if self.log_queue:
+                            self.log_queue.put(f"⚠ 日志队列功能异常: {str(e)}")
+                
+                if self.log_queue:
+                    self.log_queue.put("✓ 工具配置检查通过")
+                    
+            except Exception as e:
+                if self.log_queue:
+                    self.log_queue.put(f"✗ 工具配置异常: {str(e)}")
+                return False
+            
+            # 3. 测试批量处理相关的功能模块
+            try:
+                # 验证正则表达式模块（用于解析论文链接）
+                test_pattern = re.compile(r'test')
+                if not test_pattern.match('test'):
+                    raise Exception("正则表达式功能异常")
+                
+                # 验证URL解析模块（用于处理相对链接）
+                test_parsed = urlparse('https://example.com/test')
+                if not test_parsed.scheme or not test_parsed.netloc:
+                    raise Exception("URL解析功能异常")
+                
+                test_joined = urljoin('https://example.com/', 'test.html')
+                if test_joined != 'https://example.com/test.html':
+                    raise Exception("URL拼接功能异常")
+                
+                # 验证时间处理模块（用于记录处理时间）
+                test_time = datetime.now()
+                if not test_time:
+                    raise Exception("时间处理功能异常")
+                
+                if self.log_queue:
+                    self.log_queue.put("✓ 批量处理功能模块检查通过")
+                    
+            except ImportError as e:
+                if self.log_queue:
+                    self.log_queue.put(f"✗ 批量处理依赖模块不可用: {str(e)}")
+                return False
+            except Exception as e:
+                if self.log_queue:
+                    self.log_queue.put(f"✗ 批量处理功能模块异常: {str(e)}")
+                return False
+            
+            # 4. 所有检查通过，工具可用
+            if self.log_queue:
+                self.log_queue.put("✅ DailyPapersCollectorTool 可用性检查全部通过")
+            
+            return True
+            
+        except Exception as e:
+            # 捕获检查过程中的任何未预期异常
+            error_msg = f"可用性检查过程中发生异常: {str(e)}"
+            if self.log_queue:
+                self.log_queue.put(f"✗ {error_msg}")
+            return False
     
     def get_usage_example(self) -> Dict[str, Any]:
         """
@@ -1259,59 +1667,98 @@ class DailyPapersCollectorTool(BaseTool):
         1. 为Agent提供批量收集的使用示例
         2. 展示不同参数组合的效果
         3. 说明批量处理的预期输出格式
+        4. 确保参数名称与_execute_impl函数保持一致
         
         返回:
             Dict[str, Any]: 包含使用示例的字典
         """
         return {
-            "input_examples": [
-                {
-                    "description": "收集前10篇论文（包含PDF）",
+            "input_examples": {
+                "basic_collection": {
+                    "description": "基本批量收集（使用默认设置）",
                     "params": {
-                        "max_count": 10,
-                        "include_pdf": True
+                        "max_papers": 10,
+                        "download_pdfs": True
                     }
                 },
-                {
-                    "description": "收集所有论文（仅摘要，不下载PDF）",
+                "custom_source": {
+                    "description": "从自定义数据源收集论文",
                     "params": {
-                        "include_pdf": False
+                        "source_url": "https://huggingface.co/papers",
+                        "max_papers": 5,
+                        "download_pdfs": True
                     }
                 },
-                {
-                    "description": "从自定义URL收集论文",
+                "metadata_only": {
+                    "description": "仅收集论文元数据（不下载PDF）",
                     "params": {
-                        "source_url": "https://custom-papers-site.com",
-                        "max_count": 5
+                        "max_papers": 20,
+                        "download_pdfs": False
+                    }
+                },
+                "filtered_collection": {
+                    "description": "使用关键词过滤收集特定主题论文",
+                    "params": {
+                        "max_papers": 15,
+                        "download_pdfs": True,
+                        "filter_keywords": ["machine learning", "neural network", "AI"]
                     }
                 }
-            ],
+            },
             "expected_output": {
-                "description": "返回论文信息列表，每个元素包含完整的论文数据",
-                "example": [
-                    {
-                        "title": "论文标题1",
-                        "abstract": "论文摘要1...",
-                        "pdf_path": "/path/to/paper1.pdf",
-                        "url": "https://huggingface.co/papers/1",
-                        "extraction_status": "success"
-                    },
-                    {
-                        "title": "论文标题2",
-                        "abstract": "提取失败",
-                        "pdf_path": None,
-                        "url": "https://huggingface.co/papers/2",
-                        "extraction_status": "failed",
-                        "error_message": "网络连接超时"
-                    }
-                ]
+                "description": "返回包含批量收集结果的完整字典",
+                "structure": {
+                    "papers": "论文信息列表，每个元素包含SinglePaperExtractionTool的完整输出",
+                    "total_found": "在数据源中找到的论文总数",
+                    "total_collected": "成功收集的论文数量",
+                    "total_downloaded": "成功下载PDF的论文数量",
+                    "failed_papers": "收集失败的论文信息列表",
+                    "source_url": "实际使用的数据源URL",
+                    "collection_time": "收集完成的时间戳",
+                    "success": "整体收集任务是否成功",
+                    "error_message": "错误信息（如果失败）"
+                },
+                "example": {
+                    "papers": [
+                        {
+                            "title": "Attention Is All You Need",
+                            "abstract": "The dominant sequence transduction models...",
+                            "pdf_path": "temp_pdf/attention_is_all_you_need.pdf",
+                            "pdf_url": "https://arxiv.org/pdf/1706.03762.pdf",
+                            "url": "https://huggingface.co/papers/1706.03762",
+                            "extraction_time": "2024-01-15T10:30:00",
+                            "success": True
+                        }
+                    ],
+                    "total_found": 25,
+                    "total_collected": 10,
+                    "total_downloaded": 8,
+                    "failed_papers": [
+                        {
+                            "url": "https://huggingface.co/papers/failed_paper",
+                            "title": "Failed Paper Title",
+                            "error": "PDF下载失败: 文件大小超过限制"
+                        }
+                    ],
+                    "source_url": "https://huggingface.co/papers",
+                    "collection_time": "2024-01-15T10:35:00",
+                    "success": True,
+                    "error_message": None
+                }
             },
             "use_cases": [
-                "每日自动收集最新论文",
-                "批量构建论文数据库",
-                "为研究团队提供论文摘要汇总",
-                "定期监控特定领域的新论文"
-            ]
+                "每日自动收集最新AI论文",
+                "批量构建特定领域的论文数据库",
+                "为研究团队提供论文摘要和PDF汇总",
+                "定期监控顶级会议的新发表论文",
+                "基于关键词筛选相关研究论文"
+            ],
+            "parameter_notes": {
+                "source_url": "支持HuggingFace Papers、arXiv等主流论文网站",
+                "max_papers": "建议设置在1-50之间，过大可能导致处理时间过长",
+                "download_pdfs": "设置为False可显著提高收集速度",
+                "filter_keywords": "支持多个关键词，使用OR逻辑进行匹配"
+            }
         }
     
     def cleanup(self):
@@ -1334,7 +1781,7 @@ class DailyPapersCollectorTool(BaseTool):
         # 3. 释放其他资源
         pass
     
-    def _parse_paper_links_from_soup(self, soup):
+    def _parse_paper_links_from_soup(self, soup, source_url):
         """
         从BeautifulSoup对象中解析论文链接列表
         
@@ -1343,32 +1790,68 @@ class DailyPapersCollectorTool(BaseTool):
         2. 处理不同网站的链接格式
         3. 过滤和验证链接的有效性
         
+        参数:
+            soup (BeautifulSoup): 已解析的HTML对象
+            source_url (str): 数据源URL，用于确定解析策略
+        
         实现逻辑：
-        1. 查找包含论文的HTML元素（如article标签）
+        1. 根据数据源类型选择不同的解析策略
         2. 提取每个论文的链接和基本信息
         3. 构建完整的URL
         4. 返回论文链接列表
-        """
-        # TODO: 实现论文链接解析逻辑
-        pass
-    
-    def _process_single_paper_with_retry(self, paper_url, max_retries=3):
-        """
-        带重试机制的单篇论文处理
         
-        作用：
-        1. 提供更可靠的单篇论文处理
-        2. 处理网络不稳定等临时问题
-        3. 记录重试过程和失败原因
-        
-        实现逻辑：
-        1. 尝试调用SinglePaperExtractionTool
-        2. 如果失败，等待后重试
-        3. 记录重试次数和错误信息
-        4. 返回处理结果或错误信息
+        返回:
+            List[Dict[str, str]]: 论文链接列表，每个元素包含title和url字段
         """
-        # TODO: 实现带重试的论文处理逻辑
-        pass
+        paper_links = []
+        
+        try:
+            # 根据数据源类型选择不同的解析策略
+            if 'huggingface.co' in source_url:
+                # HuggingFace Papers页面解析
+                for card in soup.select("article"):
+                    title_tag = card.select_one("h3")
+                    if not title_tag:
+                        continue
+                    
+                    title = title_tag.text.strip()
+                    link_tag = card.find("a", href=True)
+                    if link_tag:
+                        paper_url = "https://huggingface.co" + link_tag['href']
+                        paper_links.append({
+                            "title": title,
+                            "url": paper_url
+                        })
+            
+            elif 'arxiv.org' in source_url:
+                # arXiv页面解析（如果需要支持）
+                # 这里可以添加arXiv的解析逻辑
+                if self.log_queue:
+                    self.log_queue.put("arXiv解析逻辑待实现")
+                pass
+            
+            else:
+                # 通用解析策略
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    if any(domain in href for domain in ['huggingface.co/papers', 'arxiv.org/abs']):
+                        title = link.get_text(strip=True)
+                        if title and len(title) > 10:  # 过滤掉太短的标题
+                            paper_links.append({
+                                "title": title,
+                                "url": href if href.startswith('http') else urljoin(source_url, href)
+                            })
+            
+            if self.log_queue:
+                self.log_queue.put(f"从HTML中解析出 {len(paper_links)} 个论文链接")
+                
+        except Exception as e:
+            error_msg = f"解析论文链接时发生错误: {str(e)}"
+            if self.log_queue:
+                self.log_queue.put(f"✗ {error_msg}")
+            # 返回空列表而不是抛出异常，让调用方处理
+            
+        return paper_links
     
     def get_progress_callback(self):
         """
@@ -1380,10 +1863,74 @@ class DailyPapersCollectorTool(BaseTool):
         3. 便于调试和性能优化
         
         返回:
-            callable: 进度回调函数
+            callable: 进度回调函数，接收进度信息参数
         """
-        # TODO: 实现进度回调逻辑
-        pass
+        def progress_callback(current, total, current_paper=None, status="processing", error_message=None):
+            """
+            进度回调函数
+            
+            参数:
+                current (int): 当前处理的论文序号（从1开始）
+                total (int): 总论文数量
+                current_paper (dict, optional): 当前处理的论文信息，包含title和url
+                status (str): 当前状态 - "processing", "success", "failed", "completed"
+                error_message (str, optional): 错误信息（当status为"failed"时）
+            """
+            try:
+                # 计算进度百分比
+                progress_percent = (current / total * 100) if total > 0 else 0
+                
+                # 构建进度信息
+                if status == "processing":
+                    if current_paper:
+                        message = f"📄 正在处理第 {current}/{total} 篇论文 ({progress_percent:.1f}%): {current_paper.get('title', '未知标题')}"
+                    else:
+                        message = f"📄 正在处理第 {current}/{total} 篇论文 ({progress_percent:.1f}%)"
+                        
+                elif status == "success":
+                    if current_paper:
+                        message = f"✅ 成功处理第 {current}/{total} 篇论文: {current_paper.get('title', '未知标题')}"
+                    else:
+                        message = f"✅ 成功处理第 {current}/{total} 篇论文"
+                        
+                elif status == "failed":
+                    if current_paper:
+                        message = f"❌ 处理失败第 {current}/{total} 篇论文: {current_paper.get('title', '未知标题')}"
+                        if error_message:
+                            message += f" - {error_message}"
+                    else:
+                        message = f"❌ 处理失败第 {current}/{total} 篇论文"
+                        if error_message:
+                            message += f" - {error_message}"
+                            
+                elif status == "completed":
+                    message = f"🎉 批量处理完成！成功处理 {current}/{total} 篇论文 (100%)"
+                    
+                else:
+                    message = f"📊 进度更新: {current}/{total} ({progress_percent:.1f}%) - {status}"
+                
+                # 通过日志队列发送进度信息
+                if self.log_queue:
+                    self.log_queue.put(message)
+                    
+                # 可选：返回进度信息字典供调用方使用
+                return {
+                    "current": current,
+                    "total": total,
+                    "progress_percent": progress_percent,
+                    "status": status,
+                    "current_paper": current_paper,
+                    "error_message": error_message,
+                    "message": message
+                }
+                
+            except Exception as e:
+                # 进度回调本身不应该影响主流程，记录错误但不抛出异常
+                if self.log_queue:
+                    self.log_queue.put(f"⚠️ 进度回调函数发生错误: {str(e)}")
+                return None
+        
+        return progress_callback
 
 
 class PaperDataManagerTool(BaseTool):

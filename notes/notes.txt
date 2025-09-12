@@ -73,3 +73,6 @@ agentic AI的app里面应当有不同的角色，例如planner, fetcher, parser�
 
 *****
 有一个地方需要注意，cleanup现在在SinglePaperExtraction里面，可能这是一个冗余，因为应当是所有的papers都提取后，在做删除，而不是单一的paper提取然后删除。
+
+在DailyPapersCollectorTool的_execute_impl函数里，我是直接调用了base_line的execute来调用SinglePaperExtractionTool的_execute_impl函数，
+这个调用方法逻辑上是对的，但是我需要把base_tool里面的部分完成了才行。所以按照现在的逻辑，哪怕是工具之间的互相调用也需要通过BaseTool的接口完成。
