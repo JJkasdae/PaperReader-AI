@@ -1339,6 +1339,8 @@ class DailyPapersCollectorTool(BaseTool):
             
             # 5. 根据max_papers限制处理数量
             paper_links = paper_links[:max_papers]
+            # print(f"一共要收集的paper有：{len(paper_links)}篇，最大数量为：{max_papers}\n")
+            # print(f"他们的url为：{paper_links}\n")
             
             # 6. 循环处理每篇论文
             for i, paper_info in enumerate(paper_links, 1):
@@ -1346,11 +1348,14 @@ class DailyPapersCollectorTool(BaseTool):
                     if self.log_queue:
                         self.log_queue.put(f"正在处理第 {i}/{len(paper_links)} 篇论文: {paper_info['title']}")
                     
+                    # print(f"当前要处理的paper为：{paper_info['title']}\n")
                     # 调用SinglePaperExtractionTool处理单篇论文
                     paper_result = self.single_extractor.execute(
                         paper_url=paper_info["url"],
                         download_pdf=download_pdfs
                     )
+
+                    # print(f"当前要处理的paper的结果为：{paper_result}\n")
                     
                     if paper_result.success:
                         result["papers"].append(paper_result.data)
@@ -1362,6 +1367,8 @@ class DailyPapersCollectorTool(BaseTool):
                         
                         if self.log_queue:
                             self.log_queue.put(f"✓ 成功处理: {paper_info['title']}")
+                        
+                        # print(f"当前paper {paper_info["title"]} 处理完成\n")
                     else:
                         # 处理失败的论文
                         result["failed_papers"].append({
@@ -1387,7 +1394,7 @@ class DailyPapersCollectorTool(BaseTool):
                 
                 # 添加延时避免请求过快
                 if i < len(paper_links):  # 不是最后一篇
-                    time.sleep(self.request_interval)
+                    time.sleep(self.batch_delay)
             
             # 7. 设置成功状态
             result["success"] = True
@@ -2354,53 +2361,175 @@ class PaperDataManagerTool(BaseTool):
         pass
 
 # 测试代码 - 用于验证SinglePaperExtractionTool的功能
-if __name__ == "__main__":
-    # 创建测试实例
-    print("开始测试SinglePaperExtractionTool...")
+# if __name__ == "__main__":
+#     # 创建测试实例
+#     print("开始测试SinglePaperExtractionTool...")
     
-    # 创建一个简单的日志队列模拟器
-    class SimpleLogQueue:
-        def put(self, message):
-            print(f"[LOG] {message}")
+#     # 创建一个简单的日志队列模拟器
+#     class SimpleLogQueue:
+#         def put(self, message):
+#             print(f"[LOG] {message}")
     
-    # 初始化工具
-    log_queue = SimpleLogQueue()
-    extractor = SinglePaperExtractionTool(log_queue)
+#     # 初始化工具
+#     log_queue = SimpleLogQueue()
+#     extractor = SinglePaperExtractionTool(log_queue)
     
-    # 测试用的论文URL（HuggingFace Papers示例）
-    test_url = "https://huggingface.co/papers/2509.07980"  # 可以替换为其他有效的论文URL
+#     # 测试用的论文URL（HuggingFace Papers示例）
+#     test_url = "https://huggingface.co/papers/2509.07980"  # 可以替换为其他有效的论文URL
     
-    print(f"\n测试URL: {test_url}")
-    print("="*50)
+#     print(f"\n测试URL: {test_url}")
+#     print("="*50)
+    
+#     try:
+#         # 调用_execute_impl函数进行测试
+#         result = extractor._execute_impl(
+#             paper_url=test_url,
+#             download_pdf=True,  # 设置为True测试PDF下载
+#             custom_filename="test_paper"  # 自定义文件名
+#         )
+        
+#         print("\n测试结果:")
+#         print("="*30)
+#         print(f"成功状态: {result.get('success')}")
+#         print(f"论文标题: {result.get('title')}")
+#         print(f"摘要长度: {len(result.get('abstract', '')) if result.get('abstract') else 0} 字符")
+#         print(f"PDF路径: {result.get('pdf_path')}")
+#         print(f"PDF URL: {result.get('pdf_url')}")
+#         print(f"提取时间: {result.get('extraction_time')}")
+        
+#         if result.get('error_message'):
+#             print(f"错误信息: {result.get('error_message')}")
+        
+#         # 显示摘要的前200个字符
+#         if result.get('abstract'):
+#             abstract_preview = result.get('abstract')[:200] + "..." if len(result.get('abstract', '')) > 200 else result.get('abstract')
+#             print(f"\n摘要预览:\n{abstract_preview}")
+        
+#     except Exception as e:
+#         print(f"\n测试过程中发生错误: {str(e)}")
+#         import traceback
+#         traceback.print_exc()
+    
+#     print("\n测试完成!")
+
+
+def test_daily_papers_collector_tool():
+    """
+    测试DailyPapersCollectorTool的功能性
+    主要测试_execute_impl函数的核心逻辑
+    """
+    print("\n=== 开始测试 DailyPapersCollectorTool ===\n")
     
     try:
-        # 调用_execute_impl函数进行测试
-        result = extractor._execute_impl(
-            paper_url=test_url,
-            download_pdf=True,  # 设置为True测试PDF下载
-            custom_filename="test_paper"  # 自定义文件名
-        )
+        # 1. 创建DailyPapersCollectorTool实例
+        collector = DailyPapersCollectorTool()
+        print("✓ DailyPapersCollectorTool实例创建成功")
         
-        print("\n测试结果:")
-        print("="*30)
-        print(f"成功状态: {result.get('success')}")
-        print(f"论文标题: {result.get('title')}")
-        print(f"摘要长度: {len(result.get('abstract', '')) if result.get('abstract') else 0} 字符")
-        print(f"PDF路径: {result.get('pdf_path')}")
-        print(f"PDF URL: {result.get('pdf_url')}")
-        print(f"提取时间: {result.get('extraction_time')}")
+        # 2. 测试工具可用性检查
+        print("\n--- 检查工具可用性 ---")
+        if collector.is_available():
+            print("✓ 工具可用性检查通过")
+        else:
+            print("✗ 工具可用性检查失败")
+            return
         
-        if result.get('error_message'):
-            print(f"错误信息: {result.get('error_message')}")
+        # 3. 准备测试参数
+        test_params = {
+            "max_papers": 30,  # 限制论文数量以加快测试
+            "download_pdf": True,  # 不下载PDF以加快测试
+        }
         
-        # 显示摘要的前200个字符
-        if result.get('abstract'):
-            abstract_preview = result.get('abstract')[:200] + "..." if len(result.get('abstract', '')) > 200 else result.get('abstract')
-            print(f"\n摘要预览:\n{abstract_preview}")
+        print(f"\n--- 开始执行核心逻辑测试 ---")
+        print(f"测试参数: {test_params}")
+        
+        # 4. 调用execute方法（这会间接测试_execute_impl）
+        print("\n正在执行论文收集...")
+        result = collector.execute(**test_params)
+        
+        # 5. 验证执行结果
+        print(f"\n--- 执行结果分析 ---")
+        print(f"执行成功: {result.success}")
+        print(f"执行时间: {result.execution_time:.2f}秒")
+        print(f"工具名称: {result.tool_name}")
+        
+        if result.success:
+            print("✓ 工具执行成功")
+            
+            # 分析返回的数据
+            data = result.data
+            if isinstance(data, dict):
+                print(f"\n--- 返回数据分析 ---")
+                print(f"收集的论文数量: {len(data.get('papers', []))}")
+                print(f"成功提取: {data.get('successful_extractions', 0)}")
+                print(f"失败提取: {data.get('failed_extractions', 0)}")
+                print(f"总处理时间: {data.get('total_time', 0):.2f}秒")
+                
+                # 显示前几篇论文的信息
+                papers = data.get('papers', [])
+                if papers:
+                    print(f"\n--- 论文详情预览 ---")
+                    for i, paper in enumerate(papers[:2]):  # 只显示前2篇
+                        print(f"\n论文 {i+1}:")
+                        print(f"  标题: {paper.get('title', 'N/A')[:100]}...")
+                        print(f"  URL: {paper.get('url', 'N/A')}")
+                        print(f"  提取成功: {paper.get('success', False)}")
+                        if paper.get('abstract'):
+                            abstract_preview = paper.get('abstract')[:150] + "..." if len(paper.get('abstract', '')) > 150 else paper.get('abstract')
+                            print(f"  摘要预览: {abstract_preview}")
+                        if paper.get('error_message'):
+                            print(f"  错误信息: {paper.get('error_message')}")
+                else:
+                    print("⚠️ 未收集到任何论文数据")
+            else:
+                print(f"⚠️ 返回数据格式异常: {type(data)}")
+                
+        else:
+            print("✗ 工具执行失败")
+            print(f"错误信息: {result.error_message}")
+        
+        # 6. 测试参数验证功能
+        print(f"\n--- 测试参数验证功能 ---")
+        
+        # 测试无效参数
+        invalid_params_tests = [
+            {"max_papers": -1, "expected": "负数参数"},
+            {"max_papers": "invalid", "expected": "非数字参数"},
+            {"download_pdfs": "not_bool", "expected": "非布尔参数"}
+        ]
+        
+        for test_case in invalid_params_tests:
+            try:
+                validation_result = collector.validate_parameters(**test_case)
+                if validation_result:
+                    print(f"⚠️ {test_case['expected']}验证应该失败但通过了")
+                else:
+                    print(f"✓ {test_case['expected']}验证正确失败")
+            except Exception as e:
+                print(f"✓ {test_case['expected']}验证抛出异常（预期行为）: {str(e)[:50]}...")
+        
+        # 7. 测试边界情况
+        print(f"\n--- 测试边界情况 ---")
+        
+        # 测试max_papers=0的情况
+        try:
+            zero_papers_result = collector.execute(max_papers=0, download_pdf=False)
+            if zero_papers_result.success:
+                papers_count = len(zero_papers_result.data.get('papers', []))
+                print(f"✓ max_papers=0测试: 收集到{papers_count}篇论文")
+            else:
+                print(f"✓ max_papers=0测试: 正确处理边界情况 - {zero_papers_result.error_message}")
+        except Exception as e:
+            print(f"✓ max_papers=0测试: 正确抛出异常 - {str(e)[:50]}...")
         
     except Exception as e:
-        print(f"\n测试过程中发生错误: {str(e)}")
+        print(f"\n✗ 测试过程中发生未预期的错误: {str(e)}")
         import traceback
+        print("\n详细错误信息:")
         traceback.print_exc()
     
-    print("\n测试完成!")
+    print("\n=== DailyPapersCollectorTool 测试完成 ===\n")
+
+
+if __name__ == "__main__":
+    # 运行DailyPapersCollectorTool测试
+    test_daily_papers_collector_tool()

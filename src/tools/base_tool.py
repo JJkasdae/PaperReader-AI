@@ -112,15 +112,170 @@ class BaseTool(ABC): # ABC是abstract Base Class表示一个抽象基类，所�
         4. 捕获和处理异常
         5. 记录执行时间和日志
         6. 返回标准化的 ToolResult
+        
+        参数:
+            **kwargs: 传递给具体工具实现的参数
+            
+        返回:
+            ToolResult: 标准化的工具执行结果
         """
-        # TODO: 实现统一的执行逻辑
-        # 1. 开始计时
-        # 2. 验证参数
-        # 3. 调用具体实现
-        # 4. 处理异常
-        # 5. 返回标准结果
-        pass
+        
+        # 1. 记录开始时间，用于计算执行耗时
+        start_time = time.time()
+        
+        # 获取工具名称用于日志和结果记录
+        tool_name = self.__class__.__name__
+        
+        # 记录工具执行开始的日志
+        self.log(f"开始执行工具: {tool_name}", "info")
+        if kwargs:
+            # 记录输入参数（注意：敏感信息应该被过滤）
+            safe_kwargs = self._sanitize_log_params(kwargs)
+            self.log(f"输入参数: {safe_kwargs}", "debug")
+        
+        # 初始化返回结果对象
+        result = ToolResult(
+            success=False,
+            data=None,
+            error_message=None,
+            execution_time=0.0,
+            metadata={},
+            tool_name=tool_name,
+            timestamp=start_time
+        )
+        
+        try:
+            # 2. 验证输入参数
+            self.log("开始参数验证", "debug")
+            
+            if not self.validate_parameters(**kwargs):
+                # 参数验证失败
+                error_msg = "输入参数验证失败"
+                result.error_message = error_msg
+                self.log(f"错误: {error_msg}", "error")
+                return result
+            
+            self.log("参数验证通过", "debug")
+            
+            # 4. 调用具体的工具实现逻辑
+            self.log("开始执行核心逻辑", "debug")
+            
+            # 调用子类实现的核心逻辑
+            execution_result = self._execute_impl(**kwargs)
+            
+            # 5. 处理执行结果
+            result.success = True
+            result.data = execution_result
+            
+            # 添加执行元数据
+            result.metadata = {
+                "tool_version": getattr(self, 'version', '1.0.0'),
+                "execution_context": {
+                    "input_params_count": len(kwargs),
+                    "has_log_queue": self.log_queue is not None
+                }
+            }
+            
+            self.log("工具执行成功完成", "info")
+            
+        except ValueError as e:
+            # 参数值错误（通常是业务逻辑层面的参数问题）
+            error_msg = f"参数值错误: {str(e)}"
+            result.error_message = error_msg
+            self.log(f"错误: {error_msg}", "error")
+            
+        except TypeError as e:
+            # 类型错误（通常是参数类型不匹配）
+            error_msg = f"参数类型错误: {str(e)}"
+            result.error_message = error_msg
+            self.log(f"错误: {error_msg}", "error")
+            
+        except NotImplementedError as e:
+            # 功能未实现错误（子类未正确实现抽象方法）
+            error_msg = f"功能未实现: {str(e)}"
+            result.error_message = error_msg
+            self.log(f"错误: {error_msg}", "error")
+            
+        except Exception as e:
+            # 捕获所有其他异常
+            error_msg = f"执行过程中发生未预期的错误: {str(e)}"
+            result.error_message = error_msg
+            self.log(f"错误: {error_msg}", "error")
+            
+            # 记录详细的异常信息用于调试
+            import traceback
+            detailed_error = traceback.format_exc()
+            self.log(f"详细错误信息: {detailed_error}", "debug")
+            
+        finally:
+            # 6. 计算并记录执行时间
+            end_time = time.time()
+            execution_time = end_time - start_time
+            result.execution_time = execution_time
+            
+            # 记录执行完成的日志
+            status = "成功" if result.success else "失败"
+            self.log(f"工具执行{status}，耗时: {execution_time:.3f}秒", "info")
+            
+            # 如果执行失败，记录错误摘要
+            if not result.success and result.error_message:
+                self.log(f"执行失败原因: {result.error_message}", "warning")
+        
+        # 7. 返回标准化的执行结果
+        return result
     
+    def _sanitize_log_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        过滤日志参数中的敏感信息
+        
+        作用：
+        1. 移除或脱敏敏感参数（如密码、API密钥等）
+        2. 限制参数值的长度，避免日志过长
+        3. 保护用户隐私和系统安全
+        
+        参数:
+            params: 原始参数字典
+            
+        返回:
+            Dict[str, Any]: 过滤后的安全参数字典
+        """
+        
+        # 定义敏感参数的关键词（不区分大小写）
+        sensitive_keywords = {
+            'password', 'passwd', 'pwd', 'secret', 'key', 'token', 
+            'api_key', 'apikey', 'access_token', 'auth', 'credential',
+            'private', 'confidential', 'sensitive'
+        }
+        
+        # 创建安全的参数副本
+        safe_params = {}
+        
+        for key, value in params.items():
+            # 检查参数名是否包含敏感关键词
+            key_lower = key.lower()
+            is_sensitive = any(keyword in key_lower for keyword in sensitive_keywords)
+            
+            if is_sensitive:
+                # 敏感参数：只显示类型和长度信息
+                if isinstance(value, str):
+                    safe_params[key] = f"<{type(value).__name__}:length={len(value)}>"
+                else:
+                    safe_params[key] = f"<{type(value).__name__}:hidden>"
+            else:
+                # 非敏感参数：限制显示长度
+                if isinstance(value, str) and len(value) > 100:
+                    # 长字符串截断显示
+                    safe_params[key] = f"{value[:50]}...<truncated:total_length={len(value)}>"
+                elif isinstance(value, (list, dict)) and len(str(value)) > 200:
+                    # 长列表或字典显示摘要信息
+                    safe_params[key] = f"<{type(value).__name__}:length={len(value)}>"
+                else:
+                    # 普通参数直接显示
+                    safe_params[key] = value
+        
+        return safe_params
+    
+    @abstractmethod
     def validate_parameters(self, **kwargs) -> bool:
         """
         验证输入参数是否符合要求
@@ -143,6 +298,7 @@ class BaseTool(ABC): # ABC是abstract Base Class表示一个抽象基类，所�
         # 4. 检查参数值的有效性
         pass
     
+    @abstractmethod
     def is_available(self) -> bool:
         """
         检查工具是否可用
