@@ -275,43 +275,91 @@ class ToolManager:
         # 获取工具实例
         tool_instance = self._tools[tool_name]
         
-        try:
-            # 3. 验证工具是否在当前环境中可用
-            # 调用工具的is_available()方法检查依赖项、权限等
-            # 这确保返回的工具在当前环境中是可以正常使用的
-            if not tool_instance.is_available():
-                self.logger.warning(f"工具 '{tool_name}' 存在但当前不可用，请检查依赖项和配置")
-                return None
-            
-            # 4. 记录成功获取的日志信息
-            self.logger.debug(f"成功获取工具: '{tool_name}'")
-            
-            # 5. 返回可用的工具实例
-            return tool_instance
-            
-        except Exception as e:
-            # 如果检查可用性时发生错误，记录错误并返回None
-            # 这里不抛出异常，而是返回None，因为这是一个查询操作
-            # Agent可以根据返回值判断工具是否可用
-            error_msg = f"检查工具 '{tool_name}' 可用性时发生错误: {str(e)}"
-            self.logger.error(error_msg)
-            return None
+        # 3. 记录成功获取的日志信息并返回工具实例
+        # 由于工具在注册时已经验证过可用性，这里直接返回
+        self.logger.debug(f"成功获取工具: '{tool_name}'")
+        return tool_instance
     
     def list_available_tools(self) -> List[ToolMetadata]:
         """
-        列出所有可用工具的元数据
+        列出所有已注册工具的元数据
         
         作用：
-        1. 为Agent提供工具发现功能
-        2. 支持工具的批量查询
-        3. 过滤不可用的工具
+        1. 为Agent提供工具发现功能 - Agent可以通过此方法了解系统中有哪些工具可用
+        2. 支持工具的批量查询 - 一次性获取所有工具信息，避免多次单独查询
+        3. 提供完整的工具元数据 - 包括工具名称、描述、参数定义等详细信息
+        4. 返回所有已注册的工具 - 由于工具在注册时已验证可用性，无需重复检查
+        
+        返回:
+            List[ToolMetadata]: 所有已注册工具的元数据列表
+            每个元数据包含工具的完整信息，如名称、描述、参数、分类等
+            
+        实现逻辑：
+        1. 遍历所有已注册的工具实例
+        2. 收集工具的元数据信息
+        3. 验证元数据的有效性和完整性
+        4. 按工具名称排序并返回列表
+        5. 记录操作日志便于调试和监控
+        
+        使用场景：
+        - Agent启动时发现可用工具
+        - 动态展示工具列表给用户
+        - 工具管理和监控界面
+        - 系统健康检查和诊断
         """
-        # TODO: 实现工具列表生成
-        # 1. 遍历所有注册的工具
-        # 2. 检查工具可用性
-        # 3. 收集工具元数据
-        # 4. 返回元数据列表
-        pass
+        
+        available_tools = []  # 存储可用工具的元数据列表
+        
+        # 1. 遍历所有已注册的工具实例
+        # _tools字典结构: {"tool_name": tool_instance}
+        # 由于工具在注册时已经验证过可用性，这里直接收集元数据
+        for tool_name, tool_instance in self._tools.items():
+            try:
+                # 2. 收集工具的元数据信息
+                # 调用工具的get_metadata()方法获取完整的工具信息
+                metadata = tool_instance.get_metadata()
+                
+                # 验证元数据的有效性
+                if not isinstance(metadata, ToolMetadata):
+                    self.logger.warning(f"工具 '{tool_name}' 的元数据类型无效，跳过")
+                    continue
+                
+                # 验证元数据的完整性
+                if not metadata.name or not isinstance(metadata.name, str):
+                    self.logger.warning(f"工具 '{tool_name}' 的元数据名称无效，跳过")
+                    continue
+                
+                # 将有效的元数据添加到结果列表中
+                available_tools.append(metadata)
+                self.logger.debug(f"成功收集工具元数据: '{tool_name}'")
+                
+            except Exception as e:
+                # 处理单个工具元数据获取过程中的异常
+                # 记录错误但不中断整个列表生成过程
+                self.logger.error(f"获取工具 '{tool_name}' 元数据时发生错误: {str(e)}")
+                continue
+        
+        # 4. 按工具名称排序并返回列表
+        # 使用工具名称进行字母排序，提供一致的工具顺序
+        try:
+            available_tools.sort(key=lambda metadata: metadata.name.lower())
+        except Exception as e:
+            # 排序失败时记录警告，但仍返回未排序的列表
+            self.logger.warning(f"工具列表排序失败: {str(e)}")
+        
+        # 4. 记录操作日志便于调试和监控
+        total_registered = len(self._tools)
+        total_collected = len(available_tools)
+        self.logger.info(f"工具列表生成完成 - 已注册: {total_registered}, 成功收集: {total_collected}")
+        
+        # 可选：记录详细的调试信息
+        if available_tools:
+            tool_names = [metadata.name for metadata in available_tools]
+            self.logger.debug(f"已注册工具列表: {', '.join(tool_names)}")
+        else:
+            self.logger.warning("当前没有已注册的工具")
+        
+        return available_tools
     
     def get_tools_by_category(self, category: str) -> List[BaseTool]:
         """
@@ -361,52 +409,197 @@ class ToolManager:
         # 3. 按字母顺序排序
         pass
     
-    def get_tool_count(self) -> Dict[str, int]:
+    def get_tool_count(self) -> Dict[str, Any]:
         """
         获取工具数量统计信息
         
         作用：
-        1. 提供系统工具的统计概览
-        2. 支持监控和管理功能
-        3. 便于了解各分类下的工具分布
+        1. 提供系统工具的统计概览 - 让Agent和用户了解当前系统中工具的整体情况
+        2. 支持监控和管理功能 - 便于系统管理员监控工具注册状态和分布情况
+        3. 便于了解各分类下的工具分布 - 帮助分析工具生态的完整性和平衡性
+        4. 支持系统诊断和调试 - 通过统计信息快速识别潜在问题
         
         返回:
-            Dict[str, int]: 包含总数和各分类数量的统计信息
+            Dict[str, Any]: 包含总数和各分类数量的统计信息
             格式: {
-                "total": 总工具数,
-                "available": 可用工具数,
+                "total": 总工具数 (int),
                 "categories": {
-                    "分类名": 该分类工具数,
+                    "分类名": 该分类工具数 (int),
                     ...
-                }
+                },
+                "category_count": 分类总数 (int)
             }
+            
+        实现逻辑：
+        1. 统计已注册工具的总数
+        2. 统计各分类下的工具数量
+        3. 计算分类总数
+        4. 构建并返回结构化的统计信息
+        5. 记录统计操作的日志信息
+        
+        使用场景：
+        - 系统启动时的状态检查
+        - 管理界面的统计展示
+        - 系统健康监控和报告
+        - 工具生态分析和优化
         """
-        # TODO: 实现工具数量统计
-        # 1. 统计总工具数
-        # 2. 统计可用工具数
-        # 3. 统计各分类的工具数量
-        # 4. 返回结构化的统计信息
-        pass
+        
+        try:
+            # 1. 统计已注册工具的总数
+            # _tools字典包含所有已注册的工具实例
+            total_tools = len(self._tools)
+            
+            # 2. 统计各分类下的工具数量
+            # _categories字典结构: {"category_name": ["tool1", "tool2", ...]}
+            category_stats = {}
+            
+            # 遍历所有分类，统计每个分类下的工具数量
+            for category_name, tool_list in self._categories.items():
+                # 确保分类名称有效
+                if category_name and isinstance(tool_list, list):
+                    category_stats[category_name] = len(tool_list)
+                    self.logger.debug(f"分类 '{category_name}' 包含 {len(tool_list)} 个工具")
+                else:
+                    # 处理无效分类数据
+                    self.logger.warning(f"发现无效分类数据: {category_name}")
+                    continue
+            
+            # 3. 计算分类总数
+            total_categories = len(category_stats)
+            
+            # 4. 构建并返回结构化的统计信息
+            statistics = {
+                "total": total_tools,
+                "categories": category_stats,
+                "category_count": total_categories
+            }
+            
+            # 5. 记录统计操作的日志信息
+            self.logger.info(f"工具统计完成 - 总工具数: {total_tools}, 分类数: {total_categories}")
+            
+            # 可选：记录详细的调试信息
+            if category_stats:
+                category_summary = ", ".join([f"{cat}: {count}" for cat, count in category_stats.items()])
+                self.logger.debug(f"分类详情: {category_summary}")
+            else:
+                self.logger.debug("当前没有工具分类")
+            
+            # 数据一致性验证
+            # 验证分类中的工具总数是否与注册表中的工具总数一致
+            category_tool_sum = sum(category_stats.values())
+            if category_tool_sum != total_tools:
+                self.logger.warning(
+                    f"数据一致性警告: 分类中工具总数({category_tool_sum}) "
+                    f"与注册表工具总数({total_tools})不一致"
+                )
+            
+            return statistics
+            
+        except Exception as e:
+            # 处理统计过程中的异常
+            error_msg = f"获取工具统计信息时发生错误: {str(e)}"
+            self.logger.error(error_msg)
+            
+            # 返回基本的错误状态统计
+            # 即使发生错误，也尽量提供一些基本信息
+            try:
+                basic_stats = {
+                    "total": len(self._tools) if hasattr(self, '_tools') else 0,
+                    "categories": {},
+                    "category_count": 0,
+                    "error": str(e)
+                }
+                return basic_stats
+            except:
+                # 如果连基本统计都无法获取，返回空统计
+                return {
+                    "total": 0,
+                    "categories": {},
+                    "category_count": 0,
+                    "error": "无法获取工具统计信息"
+                }
     
     def is_tool_registered(self, tool_name: str) -> bool:
         """
         检查指定工具是否已注册
         
         作用：
-        1. 避免重复注册同名工具
-        2. 支持工具存在性检查
-        3. 便于条件性工具操作
+        1. 避免重复注册同名工具 - 在注册新工具前检查是否已存在同名工具
+        2. 支持工具存在性检查 - 为Agent提供工具可用性的快速查询接口
+        3. 便于条件性工具操作 - 支持基于工具存在性的条件逻辑处理
+        4. 提供轻量级查询 - 相比get_tool方法，这是更轻量的存在性检查
         
         参数:
-            tool_name: 要检查的工具名称
+            tool_name (str): 要检查的工具名称，必须是非空字符串
             
         返回:
-            bool: True表示工具已注册，False表示未注册
+            bool: True表示工具已注册，False表示未注册或工具名称无效
+            
+        抛出异常:
+            ValueError: 如果工具名称为空或不是字符串类型
+            
+        实现逻辑：
+        1. 验证输入参数的有效性（类型和内容检查）
+        2. 标准化工具名称（去除首尾空格）
+        3. 在工具注册表中查找指定工具
+        4. 返回查找结果的布尔值
+        5. 记录查询操作的调试日志
+        
+        使用场景：
+        - 工具注册前的重复性检查
+        - Agent执行任务前的工具可用性验证
+        - 条件性工具加载和管理
+        - 系统诊断和工具清单验证
+        - 动态工具发现和管理流程
+        
+        性能特点：
+        - O(1) 时间复杂度的字典查找
+        - 轻量级操作，适合频繁调用
+        - 无副作用，不影响工具状态
         """
-        # TODO: 实现工具注册检查
-        # 1. 检查工具名称是否在_tools字典中
-        # 2. 返回布尔结果
-        pass
+        
+        # 1. 验证输入参数的有效性
+        # 检查工具名称是否为字符串类型
+        if not isinstance(tool_name, str):
+            error_msg = f"工具名称必须是字符串类型，当前类型: {type(tool_name).__name__}"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        # 检查工具名称是否为空
+        if not tool_name:
+            error_msg = "工具名称不能为空字符串"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        # 2. 标准化工具名称
+        # 去除首尾空格，确保查找的准确性
+        normalized_name = tool_name.strip()
+        
+        # 再次检查标准化后的名称是否为空
+        if not normalized_name:
+            error_msg = "工具名称不能为空白字符串"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        # 3. 在工具注册表中查找指定工具
+        # _tools字典结构: {"tool_name": tool_instance}
+        # 使用字典的 'in' 操作符进行O(1)时间复杂度的查找
+        is_registered = normalized_name in self._tools
+        
+        # 4. 记录查询操作的调试日志
+        # 根据查找结果记录不同级别的日志
+        if is_registered:
+            self.logger.debug(f"工具 '{normalized_name}' 已注册")
+        else:
+            self.logger.debug(f"工具 '{normalized_name}' 未注册")
+        
+        # 可选：记录详细的统计信息（仅在调试模式下）
+        # 这有助于了解工具查询的模式和频率
+        total_registered = len(self._tools)
+        self.logger.debug(f"当前已注册工具总数: {total_registered}")
+        
+        # 5. 返回查找结果的布尔值
+        return is_registered
     
     def refresh_tools(self) -> Dict[str, bool]:
         """
