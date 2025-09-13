@@ -1,4 +1,4 @@
-from base_tool import BaseTool, ToolMetadata, ToolResult
+from core import BaseTool, ToolMetadata, ToolResult
 import requests
 from bs4 import BeautifulSoup
 import tempfile

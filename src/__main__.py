@@ -1,166 +1,121 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-主程序入口文件 - 用于测试和运行整个PaperReader-AI系统
-
-作用：
-1. 作为独立的测试文件，避免循环导入问题
-2. 测试工具注册系统的功能
-3. 提供系统的主要入口点
+开发测试入口
+作用：用于开发阶段的测试和调试
 """
-
+# 统一导入路径
+from core import ToolManager
+from tools import SinglePaperExtractionTool, DailyPapersCollectorTool
 import sys
 import os
 
-# 添加项目根目录到Python路径
+# 添加项目路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
 sys.path.insert(0, os.path.join(project_root, 'src'))
-sys.path.insert(0, os.path.join(project_root, 'src', 'tools'))
 
-def test_register_tool_function():
-    """
-    测试register_tool函数的完整功能
+def test_tool_registration():
+    """测试工具注册功能"""
     
-    作用：
-    1. 验证工具注册系统的基本功能
-    2. 测试SinglePaperExtractionTool和DailyPapersCollectorTool的注册
-    3. 验证错误处理和边界情况
-    4. 确保工具注册表的正确性
-    """
+    registry = ToolManager()
     
-    print("=" * 60)
-    print("开始测试 register_tool 函数")
-    print("=" * 60)
+    # 注册工具
+    single_tool = SinglePaperExtractionTool()
+    daily_tool = DailyPapersCollectorTool()
+    
+    print("开始测试工具注册...")
     
     try:
-        # 导入必要的模块
-        from tools.base_tool import ToolRegistry
-        from tools.paper_extraction import SinglePaperExtractionTool, DailyPapersCollectorTool
+        # 测试注册第一个工具
+        registry.register_tool(single_tool)
+        print(f"✓ 成功注册工具: {single_tool.get_metadata().name}")
         
-        print("✓ 模块导入成功")
+        # 测试注册第二个工具
+        registry.register_tool(daily_tool)
+        print(f"✓ 成功注册工具: {daily_tool.get_metadata().name}")
         
-        # 1. 创建工具注册表实例
-        print("\n1. 创建工具注册表实例...")
-        registry = ToolRegistry()
-        print("✓ 工具注册表创建成功")
-        
-        # 2. 创建工具实例
-        print("\n2. 创建工具实例...")
-        single_paper_tool = SinglePaperExtractionTool()
-        daily_papers_tool = DailyPapersCollectorTool()
-        print("✓ 工具实例创建成功")
-        
-        # 3. 检查工具可用性
-        print("\n3. 检查工具可用性...")
-        single_available = single_paper_tool.is_available()
-        daily_available = daily_papers_tool.is_available()
-        print(f"✓ SinglePaperExtractionTool 可用性: {single_available}")
-        print(f"✓ DailyPapersCollectorTool 可用性: {daily_available}")
-        
-        # 4. 注册第一个工具
-        print("\n4. 注册 SinglePaperExtractionTool...")
-        registry.register_tool(single_paper_tool)
-        print("✓ SinglePaperExtractionTool 注册成功")
-        
-        # 5. 注册第二个工具
-        print("\n5. 注册 DailyPapersCollectorTool...")
-        registry.register_tool(daily_papers_tool)
-        print("✓ DailyPapersCollectorTool 注册成功")
-        
-        # 6. 测试重复注册错误处理
-        print("\n6. 测试重复注册错误处理...")
+        # 测试重复注册（应该抛出异常）
         try:
-            registry.register_tool(single_paper_tool)
-            print("✗ 重复注册应该抛出异常，但没有抛出")
-        except ValueError as e:
-            print(f"✓ 重复注册正确抛出异常: {e}")
+            registry.register_tool(single_tool)
+            print("✗ 重复注册检测失败")
         except Exception as e:
-            print(f"? 重复注册抛出了意外的异常类型: {type(e).__name__}: {e}")
+            print(f"✓ 重复注册检测正常: {e}")
+            
+        print(f"\n当前已注册工具数量: {len(registry._tools)}")
+        print(f"已注册工具名称: {list(registry._tools.keys())}")
+        print(f"工具分类: {dict(registry._categories)}")
         
-        # 7. 验证工具分类
-        print("\n7. 验证工具分类...")
-        single_metadata = single_paper_tool.get_metadata()
-        daily_metadata = daily_papers_tool.get_metadata()
-        print(f"✓ SinglePaperExtractionTool 分类: {single_metadata.category}")
-        print(f"✓ DailyPapersCollectorTool 分类: {daily_metadata.category}")
+        # 测试工具注销功能
+        print("\n开始测试工具注销...")
         
-        # 8. 测试工具查询功能（如果实现了）
-        print("\n8. 测试工具查询功能...")
-        if hasattr(registry, 'get_tool'):
-            try:
-                retrieved_tool = registry.get_tool(single_metadata.name)
-                if retrieved_tool is single_paper_tool:
-                    print("✓ 工具查询功能正常")
-                else:
-                    print("? 工具查询返回的实例不匹配")
-            except Exception as e:
-                print(f"? 工具查询功能异常: {e}")
+        # 测试注销存在的工具
+        tool_to_unregister = single_tool.get_metadata().name
+        result = registry.unregister_tool(tool_to_unregister)
+        if result:
+            print(f"✓ 成功注销工具: {tool_to_unregister}")
         else:
-            print("- get_tool 方法未实现")
+            print(f"✗ 注销工具失败: {tool_to_unregister}")
+            
+        # 测试注销不存在的工具
+        try:
+            result = registry.unregister_tool("不存在的工具")
+            if not result:
+                print("✓ 正确处理不存在工具的注销请求")
+            else:
+                print("✗ 不存在工具注销检测失败")
+        except Exception as e:
+            print(f"✗ 注销不存在工具时发生异常: {e}")
+            
+        # 测试无效参数
+        try:
+            registry.unregister_tool("")
+            print("✗ 空字符串参数验证失败")
+        except ValueError:
+            print("✓ 空字符串参数验证正常")
+        except Exception as e:
+            print(f"✗ 空字符串参数验证异常: {e}")
+            
+        print(f"\n注销后工具数量: {len(registry._tools)}")
+        print(f"剩余工具名称: {list(registry._tools.keys())}")
+        print(f"剩余工具分类: {dict(registry._categories)}")
         
-        # 9. 测试工具列表功能（如果实现了）
-        print("\n9. 测试工具列表功能...")
-        if hasattr(registry, 'list_tools'):
-            try:
-                tools_list = registry.list_tools()
-                print(f"✓ 注册的工具列表: {tools_list}")
-            except Exception as e:
-                print(f"? 工具列表功能异常: {e}")
+        # 测试工具获取功能
+        print("\n开始测试工具获取...")
+        
+        # 测试获取存在的工具
+        remaining_tool_name = daily_tool.get_metadata().name
+        retrieved_tool = registry.get_tool(remaining_tool_name)
+        if retrieved_tool is not None:
+            print(f"✓ 成功获取工具: {remaining_tool_name}")
+            print(f"  工具类型: {type(retrieved_tool).__name__}")
+            print(f"  工具描述: {retrieved_tool.get_metadata().description[:50]}...")
         else:
-            print("- list_tools 方法未实现")
-        
-        # 10. 测试分类查询功能（如果实现了）
-        print("\n10. 测试分类查询功能...")
-        if hasattr(registry, 'get_tools_by_category'):
-            try:
-                extraction_tools = registry.get_tools_by_category('extraction')
-                print(f"✓ extraction 分类的工具: {extraction_tools}")
-            except Exception as e:
-                print(f"? 分类查询功能异常: {e}")
+            print(f"✗ 获取工具失败: {remaining_tool_name}")
+            
+        # 测试获取不存在的工具
+        non_existent_tool = registry.get_tool("不存在的工具")
+        if non_existent_tool is None:
+            print("✓ 正确处理不存在工具的获取请求")
         else:
-            print("- get_tools_by_category 方法未实现")
-        
-        print("\n" + "=" * 60)
-        print("register_tool 函数测试完成！")
-        print("✓ 基本功能验证通过")
-        print("✓ 两个工具成功注册")
-        print("✓ 重复注册错误处理正常")
-        print("✓ 工具分类功能正确")
-        print("=" * 60)
-        
-        return True
-        
-    except ImportError as e:
-        print(f"✗ 模块导入失败: {e}")
-        print("请检查模块路径和依赖项")
-        return False
+            print("✗ 不存在工具获取检测失败")
+            
+        # 测试无效参数
+        try:
+            registry.get_tool("")
+            print("✗ 空字符串参数验证失败")
+        except ValueError:
+            print("✓ 空字符串参数验证正常")
+        except Exception as e:
+            print(f"✗ 空字符串参数验证异常: {e}")
+            
+        try:
+            registry.get_tool(None)
+            print("✗ None参数验证失败")
+        except ValueError:
+            print("✓ None参数验证正常")
+        except Exception as e:
+            print(f"✗ None参数验证异常: {e}")
         
     except Exception as e:
-        print(f"✗ 测试过程中发生错误: {e}")
-        import traceback
-        print("详细错误信息:")
-        print(traceback.format_exc())
-        return False
-
-def main():
-    """
-    主函数 - 程序入口点
-    """
-    print("PaperReader-AI 系统测试")
-    print("当前工作目录:", os.getcwd())
-    print("Python路径:", sys.path[:3])  # 只显示前3个路径
-    
-    # 运行register_tool测试
-    success = test_register_tool_function()
-    
-    if success:
-        print("\n🎉 所有测试通过！")
-        return 0
-    else:
-        print("\n❌ 测试失败，请检查错误信息")
-        return 1
+        print(f"✗ 工具注册失败: {e}")
 
 if __name__ == "__main__":
-    exit_code = main()
-    sys.exit(exit_code)
+    test_tool_registration()
