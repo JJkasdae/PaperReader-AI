@@ -3,6 +3,8 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 import time
 import logging
+import sys
+import os
 
 
 @dataclass # Python会自动帮你完成变量初始化，对应这个class你就不用手动写__init__的函数了。对于纯数据对象很好用。
@@ -14,14 +16,40 @@ class ToolMetadata:
     1. 让Agent能够理解工具的功能和用法
     2. 提供工具的参数定义和返回值类型
     3. 支持工具的自动发现和分类
+    4. 提供工具的版本管理和标签分类
+    5. 详细描述工具的返回值结构
     """
-    name: str                    # 工具唯一标识名称，如 "paper_extractor"
-    description: str             # 工具功能的详细描述
-    parameters: Dict[str, Any]   # 参数定义：{"param_name": {"type": "str", "required": True, "description": "..."}}
-    return_type: str            # 返回值类型描述
-    category: str               # 工具分类，如 "extraction", "audio", "file", "analysis"
-    # version: str = "1.0.0"      # 工具版本号
-    # author: str = ""            # 工具作者
+    # 必需属性 - 每个工具都必须提供（无默认值的字段必须在前面）
+    name: str                           # 工具唯一标识名称，如 "paper_extractor"
+    description: str                    # 工具功能的详细描述
+    parameters: Dict[str, Any]          # 参数定义：{"param_name": {"type": "str", "required": True, "description": "..."}}
+    return_type: str                   # 返回值类型描述，如 "dict", "list", "str"
+    category: str                      # 工具分类，如 "extraction", "audio", "file", "analysis"
+    
+    # 可选属性 - 有默认值的字段必须在后面
+    return_description: Dict[str, Any] = None  # 详细的返回值描述，包含schema和字段说明
+    tags: List[str] = None             # 工具标签列表，用于更细粒度的分类和搜索
+    version: str = "1.0.0"             # 工具版本号，用于版本管理和兼容性检查
+    
+    def __post_init__(self):
+        """
+        初始化后处理 - 为可选属性设置默认值
+        
+        作用：
+        1. 确保tags属性始终是一个列表
+        2. 为return_description提供基本结构
+        3. 验证必需属性的有效性
+        """
+        # 确保tags是一个列表
+        if self.tags is None:
+            self.tags = []
+        
+        # 为return_description提供基本结构
+        if self.return_description is None:
+            self.return_description = {
+                "description": f"返回{self.return_type}类型的结果",
+                "schema": {}
+            }
     
 
 @dataclass
@@ -397,29 +425,118 @@ class ToolRegistry:
         """
         self._tools: Dict[str, BaseTool] = {}  # 存储所有注册的工具
         self._categories: Dict[str, List[str]] = {}  # 按分类存储工具名称
+        self.logger = logging.getLogger(self.__class__.__name__)
     
     def register_tool(self, tool: BaseTool) -> None:
         """
-        注册一个新工具
+        注册一个新工具到工具注册表中
         
         作用：
-        1. 将工具添加到注册表中
-        2. 按分类组织工具
-        3. 验证工具的有效性
+        1. 将工具添加到注册表中，使Agent能够发现和使用该工具
+        2. 按分类组织工具，便于Agent根据任务类型查找合适的工具
+        3. 验证工具的有效性，确保只有可用的工具被注册
+        4. 维护工具的元数据信息，支持工具的自动发现和调用
+        
+        参数:
+            tool (BaseTool): 要注册的工具实例，必须继承自BaseTool基类
+        
+        抛出异常:
+            TypeError: 如果传入的不是BaseTool实例
+            ValueError: 如果工具名称已存在或工具不可用
+            RuntimeError: 如果工具元数据获取失败
         
         实现逻辑：
-        1. 获取工具的元数据
-        2. 检查工具名称是否重复
-        3. 验证工具是否可用
-        4. 添加到工具字典和分类字典
+        1. 验证输入参数的类型和有效性
+        2. 获取工具的元数据信息（名称、描述、分类等）
+        3. 检查工具名称是否与已注册的工具冲突
+        4. 验证工具是否在当前环境中可用
+        5. 将工具添加到主工具字典中
+        6. 更新分类索引，便于按类别查找工具
+        7. 记录注册成功的日志信息
         """
-        # TODO: 实现工具注册逻辑
-        # 1. 获取工具元数据
-        # 2. 检查名称冲突
-        # 3. 验证工具可用性
-        # 4. 添加到注册表
-        # 5. 更新分类索引
-        pass
+        
+        try:
+            # 2. 获取工具的元数据
+            # 调用工具的get_metadata()方法获取工具的基本信息
+            # 这包括工具名称、描述、参数定义、返回类型、分类等
+            metadata = tool.get_metadata()
+            
+            # 验证元数据是否有效
+            # 使用更灵活的类型检查，避免模块导入问题
+            if not (hasattr(metadata, '__class__') and metadata.__class__.__name__ == 'ToolMetadata'):
+                error_msg = f"工具元数据必须是ToolMetadata实例，当前类型: {type(metadata).__name__}"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            # 验证ToolMetadata必需的属性是否存在
+            required_attrs = ['name', 'description', 'parameters', 'return_type', 'category']
+            for attr in required_attrs:
+                if not hasattr(metadata, attr):
+                    error_msg = f"工具元数据缺少必需属性: {attr}"
+                    self.logger.error(error_msg)
+                    raise ValueError(error_msg)
+            
+            # 验证工具名称是否存在
+            if not metadata.name or not isinstance(metadata.name, str):
+                error_msg = "工具名称不能为空且必须是字符串类型"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            tool_name = metadata.name.strip()
+            if not tool_name:
+                error_msg = "工具名称不能为空字符串"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+        except Exception as e:
+            error_msg = f"获取工具元数据失败: {str(e)}"
+            self.logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+        
+        # 3. 检查工具名称是否已存在（避免重复注册）
+        if tool_name in self._tools:
+            error_msg = f"工具名称 '{tool_name}' 已存在，无法重复注册"
+            self.logger.warning(error_msg)
+            raise ValueError(error_msg)
+        
+        # 4. 验证工具是否在当前环境中可用
+        # 调用工具的is_available()方法检查依赖项、权限等
+        try:
+            if not tool.is_available():
+                error_msg = f"工具 '{tool_name}' 在当前环境中不可用，请检查依赖项和配置"
+                self.logger.warning(error_msg)
+                raise ValueError(error_msg)
+        except Exception as e:
+            error_msg = f"检查工具 '{tool_name}' 可用性时发生错误: {str(e)}"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg) from e
+        
+        # 5. 将工具添加到主工具字典中
+        # _tools字典的结构: {"tool_name": tool_instance}
+        self._tools[tool_name] = tool
+        
+        # 6. 更新分类索引
+        # 获取工具的分类信息，如果没有指定分类则使用默认分类
+        category = getattr(metadata, 'category', 'general')
+        if not category or not isinstance(category, str):
+            category = 'general'  # 默认分类
+        
+        category = category.strip().lower()  # 标准化分类名称
+        
+        # 如果该分类还不存在，创建新的分类列表
+        if category not in self._categories:
+            self._categories[category] = []
+        
+        # 将工具名称添加到对应分类的列表中
+        # _categories字典的结构: {"category_name": ["tool1", "tool2", ...]}
+        if tool_name not in self._categories[category]:
+            self._categories[category].append(tool_name)
+        
+        # 7. 记录成功注册的日志
+        self.logger.info(f"工具 '{tool_name}' 注册成功，分类: '{category}'")
+        
+        # 可选：记录详细的调试信息
+        self.logger.debug(f"工具详细信息 - 名称: {tool_name}, 描述: {metadata.description[:100]}..., 版本: {getattr(metadata, 'version', 'unknown')}")
     
     def unregister_tool(self, tool_name: str) -> bool:
         """
@@ -496,6 +613,91 @@ class ToolRegistry:
         # 1. 遍历所有工具的元数据
         # 2. 在名称和描述中搜索关键词
         # 3. 返回匹配的工具元数据
+        pass
+    
+    def get_categories(self) -> List[str]:
+        """
+        获取所有可用的工具分类列表
+        
+        作用：
+        1. 为Agent提供分类浏览功能
+        2. 支持按分类组织工具展示
+        3. 便于了解系统中有哪些类型的工具
+        
+        返回:
+            List[str]: 所有分类名称的列表
+        """
+        # TODO: 实现分类列表获取
+        # 1. 返回_categories字典的所有键
+        # 2. 过滤掉空分类
+        # 3. 按字母顺序排序
+        pass
+    
+    def get_tool_count(self) -> Dict[str, int]:
+        """
+        获取工具数量统计信息
+        
+        作用：
+        1. 提供系统工具的统计概览
+        2. 支持监控和管理功能
+        3. 便于了解各分类下的工具分布
+        
+        返回:
+            Dict[str, int]: 包含总数和各分类数量的统计信息
+            格式: {
+                "total": 总工具数,
+                "available": 可用工具数,
+                "categories": {
+                    "分类名": 该分类工具数,
+                    ...
+                }
+            }
+        """
+        # TODO: 实现工具数量统计
+        # 1. 统计总工具数
+        # 2. 统计可用工具数
+        # 3. 统计各分类的工具数量
+        # 4. 返回结构化的统计信息
+        pass
+    
+    def is_tool_registered(self, tool_name: str) -> bool:
+        """
+        检查指定工具是否已注册
+        
+        作用：
+        1. 避免重复注册同名工具
+        2. 支持工具存在性检查
+        3. 便于条件性工具操作
+        
+        参数:
+            tool_name: 要检查的工具名称
+            
+        返回:
+            bool: True表示工具已注册，False表示未注册
+        """
+        # TODO: 实现工具注册检查
+        # 1. 检查工具名称是否在_tools字典中
+        # 2. 返回布尔结果
+        pass
+    
+    def refresh_tools(self) -> Dict[str, bool]:
+        """
+        刷新所有工具的可用性状态
+        
+        作用：
+        1. 重新检查所有工具的可用性
+        2. 更新工具状态信息
+        3. 识别因环境变化而不可用的工具
+        
+        返回:
+            Dict[str, bool]: 各工具的可用性状态
+            格式: {"工具名": True/False, ...}
+        """
+        # TODO: 实现工具可用性刷新
+        # 1. 遍历所有注册的工具
+        # 2. 调用每个工具的is_available()方法
+        # 3. 收集并返回可用性状态
+        # 4. 可选：记录状态变化的日志
         pass
 
 
