@@ -180,3 +180,5 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 *.json
+PaperReader-AI_Portfolio.ipynb
+*.pdf
